@@ -58,6 +58,7 @@ import '../widgets/user_message_edit_overlay.dart';
 import '../utils/model_display_helper.dart';
 import '../utils/chat_layout_constants.dart';
 import '../controllers/home_page_controller.dart';
+import '../../group_chat/group_chat_store.dart';
 import '../controllers/home_view_model.dart';
 import '../controllers/scroll_controller.dart' as scroll_ctrl;
 import 'home_mobile_layout.dart';
@@ -606,11 +607,17 @@ class _HomePageState extends State<HomePage>
 
     final modelInfo = getModelDisplayInfo(settings, assistant: assistant);
 
-    final title = _controller.isTemporaryConversation
-        ? AppLocalizations.of(context)!.temporaryChatTitle
-        : ((_controller.currentConversation?.title ?? '').trim().isNotEmpty)
-        ? _controller.currentConversation!.title
-        : _controller.titleForLocale();
+    final groupChatStore = context.watch<GroupChatStore>();
+    final groupChat = _controller.currentConversation != null
+        ? groupChatStore.forConversation(_controller.currentConversation!.id)
+        : null;
+    final title = groupChat != null
+        ? groupChat.name
+        : _controller.isTemporaryConversation
+            ? AppLocalizations.of(context)!.temporaryChatTitle
+            : ((_controller.currentConversation?.title ?? '').trim().isNotEmpty)
+                ? _controller.currentConversation!.title
+                : _controller.titleForLocale();
 
     if (width >= AppBreakpoints.tablet) {
       return _buildTabletLayout(

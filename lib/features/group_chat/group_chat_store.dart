@@ -4,9 +4,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'group_chat.dart';
 
 /// 群聊配置存储。
-///
-/// key: `group_chats_v1`
-/// value: List<GroupChat> 的 JSON
 class GroupChatStore extends ChangeNotifier {
   static const String _key = 'group_chats_v1';
 
