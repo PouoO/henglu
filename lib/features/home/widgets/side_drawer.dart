@@ -292,6 +292,13 @@ class _SideDrawerState extends State<SideDrawer> with TickerProviderStateMixin {
             },
           ),
           DesktopContextMenuItem(
+            icon: Lucide.Folder,
+            label: '移到房间',
+            onTap: () async {
+              await _moveChatToRoom(context, chat);
+            },
+          ),
+          DesktopContextMenuItem(
             icon: Lucide.Trash2,
             label: l10n.sideDrawerMenuDelete,
             danger: true,
@@ -486,6 +493,13 @@ class _SideDrawerState extends State<SideDrawer> with TickerProviderStateMixin {
                       },
                     ),
                     row(
+                      icon: Lucide.Folder,
+                      label: '移到房间',
+                      action: () async {
+                        await _moveChatToRoom(context, chat);
+                      },
+                    ),
+                    row(
                       icon: Lucide.Trash,
                       label: l10n.sideDrawerMenuDelete,
                       color: Colors.redAccent,
@@ -607,6 +621,74 @@ class _SideDrawerState extends State<SideDrawer> with TickerProviderStateMixin {
       widget.onSelectConversation?.call(
         nextConversationId,
         closeDrawer: closeDrawer,
+      );
+    }
+  }
+
+  Future<void> _moveChatToRoom(BuildContext context, ChatItem chat) async {
+    final roomStore = context.read<RoomStore>();
+    if (roomStore.rooms.isEmpty) {
+      showAppSnackBar(
+        context,
+        message: '先创建一个房间',
+        type: NotificationType.warning,
+      );
+      return;
+    }
+
+    final selectedRoomId = await showModalBottomSheet<String?>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        final cs = Theme.of(ctx).colorScheme;
+        return SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('移到房间',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: AppFontWeights.semibold,
+                      color: cs.onSurface,
+                    )),
+                const SizedBox(height: 12),
+                ...roomStore.rooms.map((room) {
+                  return ListTile(
+                    leading: CircleAvatar(
+                      radius: 8,
+                      backgroundColor: room.color,
+                    ),
+                    title: Text(room.name),
+                    onTap: () => Navigator.of(ctx).pop(room.id),
+                  );
+                }),
+                const SizedBox(height: 8),
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(null),
+                  child: const Text('取消'),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    if (!context.mounted) return;
+    if (selectedRoomId != null) {
+      await roomStore.moveConversationToRoom(selectedRoomId, chat.id);
+      showAppSnackBar(
+        context,
+        message: '已移到房间',
+        type: NotificationType.success,
       );
     }
   }

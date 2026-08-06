@@ -96,6 +96,17 @@ class RoomStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 把对话移动到某个房间（先从所有房间移除，再加到目标房间）
+  Future<void> moveConversationToRoom(String roomId, String conversationId) async {
+    for (final room in _rooms) {
+      if (room.conversationIds.contains(conversationId)) {
+        final newIds = room.conversationIds.where((id) => id != conversationId).toList();
+        await update(room.copyWith(conversationIds: newIds));
+      }
+    }
+    await addConversation(roomId, conversationId);
+  }
+
   /// 把对话 ID 加到某个房间
   Future<void> addConversation(String roomId, String conversationId) async {
     final idx = _rooms.indexWhere((r) => r.id == roomId);
