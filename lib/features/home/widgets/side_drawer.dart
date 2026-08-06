@@ -41,6 +41,7 @@ import '../../../shared/widgets/emoji_text.dart';
 import '../../../theme/app_font_weights.dart';
 import '../../rooms/room_store.dart';
 import '../../rooms/widgets/room_filter_bar.dart';
+import '../../group_chat/pages/group_chat_page.dart';
 import '../../../core/providers/tag_provider.dart';
 import '../../assistant/widgets/assistant_select_sheet.dart';
 import '../../../desktop/hotkeys/sidebar_tab_bus.dart';
@@ -299,6 +300,17 @@ class _SideDrawerState extends State<SideDrawer> with TickerProviderStateMixin {
             },
           ),
           DesktopContextMenuItem(
+            icon: Lucide.User,
+            label: '群聊成员',
+            onTap: () async {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => GroupChatPage(conversationId: chat.id),
+                ),
+              );
+            },
+          ),
+          DesktopContextMenuItem(
             icon: Lucide.Trash2,
             label: l10n.sideDrawerMenuDelete,
             danger: true,
@@ -497,6 +509,17 @@ class _SideDrawerState extends State<SideDrawer> with TickerProviderStateMixin {
                       label: '移到房间',
                       action: () async {
                         await _moveChatToRoom(context, chat);
+                      },
+                    ),
+                    row(
+                      icon: Lucide.User,
+                      label: '群聊成员',
+                      action: () async {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => GroupChatPage(conversationId: chat.id),
+                          ),
+                        );
                       },
                     ),
                     row(

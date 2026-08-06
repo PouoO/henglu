@@ -21,6 +21,7 @@ import 'theme/custom_theme_store.dart';
 import 'features/ble/ble_config_store.dart';
 import 'features/ble/ble_manager.dart';
 import 'features/rooms/room_store.dart';
+import 'features/group_chat/group_chat_store.dart';
 import 'features/settings/services/background_keepalive_store.dart';
 import 'features/server/server_config_store.dart';
 
@@ -615,6 +616,7 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => CustomThemeStore()),
         ChangeNotifierProvider(create: (_) => BackgroundKeepAliveStore()),
         ChangeNotifierProvider(create: (_) => RoomStore()),
+        ChangeNotifierProvider(create: (_) => GroupChatStore()),
       ],
       child: Builder(
         builder: (context) {
@@ -627,6 +629,7 @@ class MyApp extends StatelessWidget {
               context.read<CustomThemeStore>().load();
               await context.read<BackgroundKeepAliveStore>().load();
               await context.read<RoomStore>().load();
+              await context.read<GroupChatStore>().load();
             } catch (_) {}
           });
           // Lazily ensure system fonts only if user selected a system family (desktop only)
