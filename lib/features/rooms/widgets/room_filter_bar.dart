@@ -15,7 +15,7 @@ class RoomFilterBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final roomStore = context.watch<RoomStore>();
     final rooms = roomStore.rooms;
-    final selectedId = roomStore.selectedRoomId;
+    final selectedId = roomStore.activeId;
     final cs = Theme.of(context).colorScheme;
 
     return SizedBox(
@@ -28,7 +28,7 @@ class RoomFilterBar extends StatelessWidget {
             label: '全部',
             color: cs.primary,
             selected: selectedId == null,
-            onTap: () => roomStore.selectRoom(null),
+            onTap: () => roomStore.setActive(null),
           ),
           for (final room in rooms)
             Padding(
@@ -37,7 +37,7 @@ class RoomFilterBar extends StatelessWidget {
                 label: room.name,
                 color: room.color,
                 selected: selectedId == room.id,
-                onTap: () => roomStore.selectRoom(room.id),
+                onTap: () => roomStore.setActive(room.id),
               ),
             ),
         ],

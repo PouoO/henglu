@@ -2073,7 +2073,7 @@ class _SideDrawerState extends State<SideDrawer> with TickerProviderStateMixin {
                           .watch<AssistantProvider>()
                           .currentAssistantId;
                       final roomStore = context.watch<RoomStore>();
-                      final selectedRoom = roomStore.selectedRoom;
+                      final selectedRoom = roomStore.activeRoom;
                       final roomConversationIds = selectedRoom?.conversationIds.toSet();
                       final conversations = chatService
                           .getAllConversations()
