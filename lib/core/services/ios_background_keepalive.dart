@@ -29,9 +29,7 @@ class IosBackgroundKeepAlive {
       final session = await AudioSession.instance;
       await session.configure(const AudioSessionConfiguration(
         avAudioSessionCategory: AVAudioSessionCategory.playback,
-        avAudioSessionCategoryOptions: {
-          AVAudioSessionCategoryOptions.mixWithOthers,
-        },
+        avAudioSessionCategoryOptions: AVAudioSessionCategoryOptions.mixWithOthers,
         avAudioSessionMode: AVAudioSessionMode.defaultMode,
       ));
       _initialized = true;
