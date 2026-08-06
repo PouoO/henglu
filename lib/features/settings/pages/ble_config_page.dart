@@ -126,6 +126,8 @@ class _BleConfigPageState extends State<BleConfigPage> {
         ],
       ),
     );
+  }
+
   void _openScan(BuildContext context) {
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => const BleScanPage()),

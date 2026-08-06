@@ -174,7 +174,7 @@ class _CharacteristicPickerState extends State<_CharacteristicPicker> {
 
   Future<void> _connectAndDiscover() async {
     try {
-      await widget.device.connect(timeout: const Duration(seconds: 10));
+      await widget.device.connect(timeout: const Duration(seconds: 10), license: License.free);
       final services = await widget.device.discoverServices();
       if (!mounted) return;
       setState(() {
