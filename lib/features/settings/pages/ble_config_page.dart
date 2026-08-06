@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../../../icons/lucide_adapter.dart';
 import '../../ble/ble_config_store.dart';
 import 'ble_scan_page.dart';
@@ -273,7 +274,7 @@ class _BleConfigEditPageState extends State<BleConfigEditPage> {
           _field('保活重发间隔（毫秒）', _keepAliveCtl, '0=不保活，谜姬类设备填 200'),
           _field('停止指令 hex（可选）', _stopDataCtl, '停止时发的原始字节，如 0312f3...'),
           const SizedBox(height: 24),
-          if (widget.config != null)
+          if (widget.config != null) ...[
             FilledButton.tonalIcon(
               onPressed: () async {
                 await context.read<BleConfigStore>().setActive(widget.config!.id);
@@ -282,9 +283,71 @@ class _BleConfigEditPageState extends State<BleConfigEditPage> {
               icon: const Icon(Lucide.Check),
               label: const Text('设为当前设备'),
             ),
+            const SizedBox(height: 12),
+            FilledButton.tonalIcon(
+              onPressed: _testConnection,
+              icon: const Icon(Lucide.Bluetooth),
+              label: const Text('测试连接'),
+            ),
+          ],
         ],
       ),
     );
+  }
+
+  Future<void> _testConnection() async {
+    final config = widget.config;
+    if (config == null || config.remoteId == null || config.remoteId!.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('没有设备 ID，请重新扫描')),
+      );
+      return;
+    }
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const AlertDialog(
+        content: Row(
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(width: 16),
+            Text('正在连接...'),
+          ],
+        ),
+      ),
+    );
+    try {
+      final device = BluetoothDevice.fromRemoteId(
+        remoteId: DeviceIdentifier(config.remoteId!),
+      );
+      await device.connect(
+        timeout: Duration(seconds: config.connectTimeout),
+        license: License.free,
+      );
+      final services = await device.discoverServices();
+      if (mounted) Navigator.of(context).pop();
+      final service = services.cast<BluetoothService?>().firstWhere(
+        (s) => s?.uuid.toString().toLowerCase() == config.serviceUuid.toLowerCase(),
+        orElse: () => null,
+      );
+      if (service == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('连接成功，但未找到配置的服务 UUID')),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('连接成功并发现服务')),
+        );
+      }
+      try {
+        await device.disconnect();
+      } catch (_) {}
+    } catch (e) {
+      if (mounted) Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('连接失败: $e')),
+      );
+    }
   }
 
   Widget _field(String label, TextEditingController ctl, String hint) {

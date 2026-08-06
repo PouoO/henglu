@@ -77,6 +77,7 @@ class _BleScanPageState extends State<BleScanPage> {
       name: result.device.platformName.isNotEmpty
           ? result.device.platformName
           : result.device.remoteId.str,
+      remoteId: result.device.remoteId.str,
       serviceUuid: picked.serviceUuid,
       writeUuid: picked.writeUuid,
       notifyUuid: picked.notifyUuid,

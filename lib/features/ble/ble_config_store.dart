@@ -22,6 +22,7 @@ class BleDeviceConfig {
   BleDeviceConfig({
     required this.id,
     required this.name,
+    this.remoteId,
     required this.serviceUuid,
     required this.writeUuid,
     this.notifyUuid,
@@ -36,6 +37,7 @@ class BleDeviceConfig {
   Map<String, dynamic> toJson() => {
         'id': id,
         'name': name,
+        if (remoteId != null) 'remoteId': remoteId,
         'serviceUuid': serviceUuid,
         'writeUuid': writeUuid,
         'notifyUuid': notifyUuid,
@@ -51,6 +53,7 @@ class BleDeviceConfig {
     return BleDeviceConfig(
       id: json['id'] as String,
       name: json['name'] as String,
+      remoteId: json['remoteId'] as String?,
       serviceUuid: json['serviceUuid'] as String,
       writeUuid: json['writeUuid'] as String,
       notifyUuid: json['notifyUuid'] as String?,
@@ -65,6 +68,7 @@ class BleDeviceConfig {
 
   BleDeviceConfig copyWith({
     String? name,
+    String? remoteId,
     String? serviceUuid,
     String? writeUuid,
     String? notifyUuid,
@@ -78,6 +82,7 @@ class BleDeviceConfig {
     return BleDeviceConfig(
       id: id,
       name: name ?? this.name,
+      remoteId: remoteId ?? this.remoteId,
       serviceUuid: serviceUuid ?? this.serviceUuid,
       writeUuid: writeUuid ?? this.writeUuid,
       notifyUuid: notifyUuid ?? this.notifyUuid,
@@ -141,6 +146,7 @@ class BleConfigStore extends ChangeNotifier {
   /// 新增配置
   Future<BleDeviceConfig> add({
     required String name,
+    String? remoteId,
     String serviceUuid = '',
     String writeUuid = '',
     String? notifyUuid,
@@ -155,6 +161,7 @@ class BleConfigStore extends ChangeNotifier {
     final config = BleDeviceConfig(
       id: 'ble_$now',
       name: name,
+      remoteId: remoteId,
       serviceUuid: serviceUuid,
       writeUuid: writeUuid,
       notifyUuid: notifyUuid,
