@@ -317,7 +317,7 @@ class _BleConfigEditPageState extends State<BleConfigEditPage> {
       ),
     );
     try {
-      final device = BluetoothDevice.fromRemoteId(
+      final device = BluetoothDevice(
         remoteId: DeviceIdentifier(config.remoteId!),
       );
       await device.connect(

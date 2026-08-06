@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 class BleDeviceConfig {
   final String id;
   final String name; // 用户起的名字，方便识别
+  final String? remoteId; // 设备 MAC/remoteId，测试连接用
   final String serviceUuid; // 服务 UUID
   final String writeUuid; // 写特征 UUID
   final String? notifyUuid; // 通知特征 UUID（可选）
