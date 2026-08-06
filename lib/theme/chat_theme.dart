@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:convert';
+import 'dart:ui' as ui;
 
 /// 聊天界面视觉扩展主题。
 ///
@@ -96,10 +97,10 @@ class ChatTheme extends ThemeExtension<ChatTheme> {
       inputBarColor: Color.lerp(inputBarColor, other.inputBarColor, t)!,
       topBarColor: Color.lerp(topBarColor, other.topBarColor, t)!,
       backgroundColor: Color.lerp(backgroundColor, other.backgroundColor, t),
-      messageBorderRadius: lerpDouble(messageBorderRadius, other.messageBorderRadius, t)!,
-      messageSmallRadius: lerpDouble(messageSmallRadius, other.messageSmallRadius, t)!,
-      avatarRadius: lerpDouble(avatarRadius, other.avatarRadius, t)!,
-      messageSpacing: lerpDouble(messageSpacing, other.messageSpacing, t)!,
+      messageBorderRadius: ui.lerpDouble(messageBorderRadius, other.messageBorderRadius, t)!,
+      messageSmallRadius: ui.lerpDouble(messageSmallRadius, other.messageSmallRadius, t)!,
+      avatarRadius: ui.lerpDouble(avatarRadius, other.avatarRadius, t)!,
+      messageSpacing: ui.lerpDouble(messageSpacing, other.messageSpacing, t)!,
       userAvatarFrameColor: Color.lerp(userAvatarFrameColor, other.userAvatarFrameColor, t)!,
       assistantAvatarFrameColor: Color.lerp(assistantAvatarFrameColor, other.assistantAvatarFrameColor, t)!,
     );
