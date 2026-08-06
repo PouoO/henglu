@@ -27,6 +27,7 @@ import 'package:Kelivo/theme/app_font_weights.dart';
 import 'ble_config_page.dart';
 import 'server_config_page.dart';
 import '../services/background_keepalive_store.dart';
+import '../../rooms/pages/rooms_page.dart';
 
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key});
@@ -318,6 +319,17 @@ class SettingsPage extends StatelessWidget {
                 onTap: () {
                   Navigator.of(context).push(
                     MaterialPageRoute(builder: (_) => const ServerConfigPage()),
+                  );
+                },
+              ),
+              _iosDivider(context),
+              _iosNavRow(
+                context,
+                icon: Lucide.Folder,
+                label: '房间 / 工作区',
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const RoomsPage()),
                   );
                 },
               ),
