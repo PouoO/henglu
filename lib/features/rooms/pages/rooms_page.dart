@@ -2,7 +2,8 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../room_store.dart';
-import '../../icons/lucide_adapter.dart';
+import '../room.dart';
+import '../../../icons/lucide_adapter.dart';
 import '../../../theme/app_font_weights.dart';
 
 /// 房间/工作区管理页。
