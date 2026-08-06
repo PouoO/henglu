@@ -1,0 +1,955 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart'
+    show kIsWeb, defaultTargetPlatform, TargetPlatform;
+import 'dart:async';
+import 'dart:ui' show AppExitResponse;
+import 'l10n/app_localizations.dart';
+import 'features/home/pages/home_page.dart';
+import 'features/migration/hive_to_sqlite_migration_page.dart';
+import 'features/migration/hive_to_sqlite_migration_service.dart';
+import 'desktop/desktop_home_page.dart';
+import 'package:flutter/services.dart';
+import 'package:window_manager/window_manager.dart';
+import 'desktop/desktop_window_controller.dart';
+import 'desktop/desktop_tray_controller.dart';
+// import 'package:logging/logging.dart' as logging;
+// Theme is now managed in SettingsProvider
+import 'theme/theme_factory.dart';
+import 'theme/palettes.dart';
+import 'theme/custom_theme.dart';
+import 'theme/custom_theme_store.dart';
+import 'features/ble/ble_config_store.dart';
+import 'features/ble/ble_manager.dart';
+import 'features/server/server_config_store.dart';
+
+import 'package:provider/provider.dart';
+import 'package:dynamic_color/dynamic_color.dart';
+import 'core/providers/user_provider.dart';
+import 'core/providers/settings_provider.dart';
+import 'core/providers/mcp_provider.dart';
+import 'core/providers/tts_provider.dart';
+import 'core/providers/assistant_provider.dart';
+import 'core/providers/tag_provider.dart';
+import 'core/providers/update_provider.dart';
+import 'core/providers/quick_phrase_provider.dart';
+import 'core/providers/instruction_injection_provider.dart';
+import 'core/providers/instruction_injection_group_provider.dart';
+import 'core/providers/world_book_provider.dart';
+import 'core/providers/memory_provider.dart';
+import 'core/providers/backup_provider.dart';
+import 'core/providers/s3_backup_provider.dart';
+import 'core/providers/backup_reminder_provider.dart';
+import 'core/providers/hotkey_provider.dart';
+import 'core/database/database_installation_gate.dart';
+import 'core/database/app_database.dart';
+import 'core/database/business_migration_engine.dart';
+import 'core/database/business_preferences.dart';
+import 'core/database/business_repository.dart';
+import 'core/database/business_startup_gate.dart';
+import 'core/database/chat_database_gateway.dart';
+import 'core/services/chat/chat_service.dart';
+import 'core/services/app_exit_flush.dart';
+import 'core/services/backup/restore_archive_pruner.dart';
+import 'core/services/backup/restore_business_lease.dart';
+import 'core/services/backup/restore_startup_gate.dart';
+import 'core/services/backup/restore_receipt.dart';
+import 'core/services/mcp/mcp_tool_service.dart';
+import 'core/services/logging/flutter_logger.dart';
+import 'features/home/services/ask_user_interaction_service.dart';
+import 'features/home/services/tool_approval_service.dart';
+import 'utils/app_directories.dart';
+import 'utils/platform_utils.dart';
+import 'utils/sandbox_path_resolver.dart';
+import 'shared/widgets/app_overlays.dart';
+import 'shared/widgets/snackbar.dart';
+import 'shared/widgets/restore_failure_screen.dart';
+import 'shared/widgets/restore_outcome_notice.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:system_fonts/system_fonts.dart';
+import 'dart:io'
+    show
+        Directory,
+        File,
+        Platform,
+        stderr; // kept for global override usage inside provider
+import 'core/services/android_background.dart';
+import 'core/services/notification_service.dart';
+import 'features/home/controllers/chat_actions.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+final RouteObserver<ModalRoute<dynamic>> routeObserver =
+    RouteObserver<ModalRoute<dynamic>>();
+bool _didCheckUpdates = false; // one-time update check flag
+bool _didEnsureAssistants = false; // ensure defaults after l10n ready
+
+Future<void> main() async {
+  await runZoned(
+    () async {
+      WidgetsFlutterBinding.ensureInitialized();
+      FlutterLogger.installGlobalHandlers();
+      final appDataDirectory = await AppDirectories.getAppDataDirectory();
+      final RestoreReceipt? restoreOutcome;
+      try {
+        // The lease remains process-owned through its internal registry until
+        // process exit, preventing another instance from racing business I/O.
+        final businessLease = await RestoreBusinessLease.acquire(
+          appDataDirectory: appDataDirectory,
+        );
+        restoreOutcome =
+            await RestoreStartupGate.recoverAndRequireBusinessReady(
+              appDataDirectory: appDataDirectory,
+              businessLease: businessLease,
+            );
+      } catch (error, stackTrace) {
+        stderr.writeln('[RestoreStartupGate] $error\n$stackTrace');
+        await _initRestoreFailureWindow();
+        runApp(
+          _RestoreFailureApp(
+            diagnosticCode: restoreFailureDiagnosticCode(error),
+          ),
+        );
+        return;
+      }
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final enabled = prefs.getBool('flutter_log_enabled_v1') ?? false;
+        await FlutterLogger.setEnabled(enabled);
+      } catch (_) {}
+      // Trim Flutter global image cache to reduce memory pressure from large images
+      try {
+        PaintingBinding.instance.imageCache.maximumSize = 200;
+        PaintingBinding.instance.imageCache.maximumSizeBytes =
+            48 << 20; // ~48MB
+      } catch (_) {}
+      // Desktop (Windows) window setup: hide native title bar for custom Flutter bar
+      await _initDesktopWindow();
+      // Avoid preloading all system fonts at launch (huge memory on desktop)
+      // Debug logging and global error handlers were enabled previously for diagnosis.
+      // They are commented out now per request to reduce log noise.
+      // FlutterError.onError = (FlutterErrorDetails details) { ... };
+      // WidgetsBinding.instance.platformDispatcher.onError = (Object error, StackTrace stack) { ... };
+      // logging.Logger.root.level = logging.Level.ALL;
+      // logging.Logger.root.onRecord.listen((rec) { ... });
+      // Cache current Documents directory to fix sandboxed absolute paths on iOS
+      await SandboxPathResolver.init();
+      ChatDatabaseLease? processDatabaseLease;
+      BusinessPreferences? businessPreferences;
+      var recoveryAttempted = false;
+      while (true) {
+        try {
+          final migrationDecision = await HiveToSqliteMigrationService.check();
+          if (migrationDecision.needsMigration) {
+            runApp(
+              MigrationApp(
+                service: HiveToSqliteMigrationService(migrationDecision),
+                restoreOutcome: restoreOutcome?.state,
+              ),
+            );
+            return;
+          }
+          await DatabaseInstallationGate.ensureReady(
+            appDataDirectory: appDataDirectory,
+            allowDatabaseIdentityChange:
+                restoreOutcome?.selectedComponents.contains(
+                  RestoreComponent.database,
+                ) ??
+                false,
+          );
+          final databaseFile = File(
+            '${appDataDirectory.path}/${AppDatabase.databaseFileName}',
+          );
+          final databaseLease = await ChatDatabaseGateway.instance.acquire(
+            databaseFile,
+          );
+          try {
+            final legacyPreferences =
+                await SharedPreferencesLegacyBusinessPreferences.open();
+            final loadedBusinessPreferences =
+                await BusinessStartupGate.migrateAndLoad(
+                  repository: databaseLease.businessRepository,
+                  legacyPreferences: legacyPreferences,
+                );
+            processDatabaseLease = databaseLease;
+            businessPreferences = loadedBusinessPreferences;
+          } catch (_) {
+            await databaseLease.release();
+            rethrow;
+          }
+          break;
+        } catch (error, stackTrace) {
+          stderr.writeln('[DatabaseAdmission] $error\n$stackTrace');
+          if (!recoveryAttempted) {
+            recoveryAttempted = true;
+            final recovery = await _recoverFailedAdmission(
+              appDataDirectory,
+              error,
+            );
+            if (recovery == _AdmissionRecovery.remigrate) {
+              runApp(
+                MigrationApp(
+                  service: HiveToSqliteMigrationService(
+                    _legacyMigrationDecision(appDataDirectory),
+                  ),
+                  restoreOutcome: restoreOutcome?.state,
+                ),
+              );
+              return;
+            }
+            if (recovery == _AdmissionRecovery.rebuilt) {
+              continue;
+            }
+          }
+          await _initRestoreFailureWindow();
+          runApp(
+            _RestoreFailureApp(
+              diagnosticCode: restoreFailureDiagnosticCode(error),
+            ),
+          );
+          return;
+        }
+      }
+      // Desktop exit hook: drain queued preference writes before process exit.
+      _installExitFlush(businessPreferences);
+      // Best-effort trim of archived restore runs after a few cold starts.
+      unawaited(_pruneRestoreArchive(appDataDirectory));
+      // Enable edge-to-edge to allow content under system bars (Android)
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+      // Start app (Flutter log capture is toggleable and off by default)
+      runApp(
+        MyApp(
+          databaseLease: processDatabaseLease,
+          businessPreferences: businessPreferences,
+          restoreOutcome: restoreOutcome?.state,
+        ),
+      );
+    },
+    zoneSpecification: ZoneSpecification(
+      print: (self, parent, zone, line) {
+        FlutterLogger.logPrint(line);
+        parent.print(zone, line);
+      },
+    ),
+  );
+}
+
+enum _AdmissionRecovery { none, rebuilt, remigrate }
+
+/// Names must mirror HiveToSqliteMigrationService.check().
+const _legacyHiveSourceNames = <String>[
+  'conversations.hive',
+  'messages.hive',
+  'tool_events_v1.hive',
+];
+
+bool _legacyHiveSourcesExist(Directory appDataDirectory) =>
+    _legacyHiveSourceNames.any(
+      (name) => File('${appDataDirectory.path}/$name').existsSync(),
+    );
+
+Future<_AdmissionRecovery> _recoverFailedAdmission(
+  Directory appDataDirectory,
+  Object error,
+) async {
+  final action = await DatabaseInstallationGate.recoveryActionFor(
+    appDataDirectory: appDataDirectory,
+    error: error,
+    legacyHiveDataPresent: _legacyHiveSourcesExist(appDataDirectory),
+  );
+  switch (action) {
+    case DatabaseRecoveryAction.rebuildAutomatically:
+      try {
+        await DatabaseInstallationGate.rebuildFresh(
+          appDataDirectory: appDataDirectory,
+        );
+        return _AdmissionRecovery.rebuilt;
+      } catch (rebuildError, rebuildStack) {
+        stderr.writeln(
+          '[DatabaseAdmission] rebuild failed: $rebuildError\n$rebuildStack',
+        );
+        return _AdmissionRecovery.none;
+      }
+    case DatabaseRecoveryAction.promptRemigration:
+      return _AdmissionRecovery.remigrate;
+    case DatabaseRecoveryAction.promptUpgrade:
+    case DatabaseRecoveryAction.none:
+      return _AdmissionRecovery.none;
+  }
+}
+
+HiveToSqliteMigrationDecision _legacyMigrationDecision(
+  Directory appDataDirectory,
+) {
+  return HiveToSqliteMigrationDecision(
+    needsMigration: true,
+    appDataDir: appDataDirectory,
+    sqliteFile: File(
+      '${appDataDirectory.path}/${AppDatabase.databaseFileName}',
+    ),
+    hiveFiles: [
+      for (final name in _legacyHiveSourceNames)
+        if (File('${appDataDirectory.path}/$name').existsSync())
+          File('${appDataDirectory.path}/$name'),
+    ],
+  );
+}
+
+Future<void> _initRestoreFailureWindow() async {
+  if (kIsWeb) return;
+  final isDesktop =
+      defaultTargetPlatform == TargetPlatform.windows ||
+      defaultTargetPlatform == TargetPlatform.macOS ||
+      defaultTargetPlatform == TargetPlatform.linux;
+  if (!isDesktop) return;
+  try {
+    await windowManager.ensureInitialized();
+    if (defaultTargetPlatform == TargetPlatform.windows) {
+      await windowManager.setTitleBarStyle(TitleBarStyle.hidden);
+      await windowManager.show();
+      await windowManager.focus();
+      return;
+    }
+    await windowManager.waitUntilReadyToShow(
+      const WindowOptions(title: 'Kelivo'),
+      () async {
+        await windowManager.show();
+        await windowManager.focus();
+      },
+    );
+  } catch (error) {
+    stderr.writeln('[RestoreFailureWindow] $error');
+  }
+}
+
+class _RestoreFailureApp extends StatelessWidget {
+  const _RestoreFailureApp({required this.diagnosticCode});
+
+  final String diagnosticCode;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = ThemePalettes.defaultPalette;
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'Kelivo',
+      supportedLocales: AppLocalizations.supportedLocales,
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      theme: buildLightThemeForScheme(palette.light),
+      darkTheme: buildDarkThemeForScheme(palette.dark),
+      home: diagnosticCode == 'database_schema_too_new'
+          ? _UpdateRequiredScreen(diagnosticCode: diagnosticCode)
+          : RestoreFailureScreen(
+              diagnosticCode: diagnosticCode,
+              restart: PlatformUtils.restartApp,
+            ),
+    );
+  }
+}
+
+/// Shown when the installed database was written by a newer app version;
+/// restarting cannot help, so the only action is updating Kelivo.
+class _UpdateRequiredScreen extends StatelessWidget {
+  const _UpdateRequiredScreen({required this.diagnosticCode});
+
+  final String diagnosticCode;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
+    final colors = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 560),
+              child: Material(
+                color: colors.surfaceContainerLow,
+                borderRadius: BorderRadius.circular(20),
+                child: Padding(
+                  padding: const EdgeInsets.all(28),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: 56,
+                        height: 56,
+                        decoration: BoxDecoration(
+                          color: colors.primaryContainer,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Icon(
+                          Icons.system_update_alt_rounded,
+                          size: 30,
+                          color: colors.onPrimaryContainer,
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      Text(
+                        l10n.startupDatabaseUpdateRequiredTitle,
+                        style: textTheme.headlineSmall?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        l10n.startupDatabaseUpdateRequiredContent,
+                        style: textTheme.bodyLarge?.copyWith(
+                          color: colors.onSurfaceVariant,
+                          height: 1.45,
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: colors.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: SelectableText(
+                          l10n.backupRestoreFailureDiagnostic(diagnosticCode),
+                          style: textTheme.bodySmall?.copyWith(
+                            color: colors.onSurfaceVariant,
+                            fontFamily: 'monospace',
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+Future<void> _initDesktopWindow() async {
+  if (kIsWeb) return;
+  try {
+    if (defaultTargetPlatform == TargetPlatform.windows) {
+      await windowManager.ensureInitialized();
+      await windowManager.setTitleBarStyle(TitleBarStyle.hidden);
+    }
+    // Initialize and show desktop window with persisted size/position
+    await DesktopWindowController.instance.initializeAndShow(title: 'Kelivo');
+  } catch (_) {
+    // Ignore on unsupported platforms.
+  }
+}
+
+// Removed eager system font preloading to reduce memory footprint at launch.
+
+AppLifecycleListener? _exitFlushListener;
+
+/// Desktop-only: mobile process kills cannot be intercepted, and SQLite WAL
+/// already protects committed transactions, so only Dart-side write queues
+/// need draining before exit.
+void _installExitFlush(BusinessPreferences businessPreferences) {
+  if (kIsWeb) return;
+  final isDesktop =
+      defaultTargetPlatform == TargetPlatform.windows ||
+      defaultTargetPlatform == TargetPlatform.macOS ||
+      defaultTargetPlatform == TargetPlatform.linux;
+  if (!isDesktop || _exitFlushListener != null) return;
+  AppExitFlush.register(businessPreferences.flushPendingWrites);
+  AppExitFlush.register(ChatActions.flushActiveGenerationProgress);
+  _exitFlushListener = AppLifecycleListener(
+    onExitRequested: () async {
+      try {
+        // Bound the wait: a stuck write transaction must not leave the
+        // process unkillable after macOS answers NSTerminateLater.
+        await AppExitFlush.flushAll().timeout(
+          const Duration(seconds: 2),
+          onTimeout: () {},
+        );
+      } catch (_) {}
+      return AppExitResponse.exit;
+    },
+  );
+}
+
+Future<void> _pruneRestoreArchive(Directory appDataDirectory) async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    const key = RestoreArchivePruner.coldStartsKey;
+    await RestoreArchivePruner(
+      appDataDirectory: appDataDirectory,
+      readColdStarts: () async => prefs.getInt(key) ?? 0,
+      writeColdStarts: (count) => prefs.setInt(key, count),
+    ).pruneAfterSuccessfulColdStart();
+  } catch (_) {}
+}
+
+class MigrationApp extends StatelessWidget {
+  const MigrationApp({super.key, required this.service, this.restoreOutcome});
+
+  final HiveToSqliteMigrationService service;
+  final RestoreReceiptState? restoreOutcome;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = ThemePalettes.defaultPalette;
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'Kelivo',
+      supportedLocales: AppLocalizations.supportedLocales,
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      theme: buildLightThemeForScheme(palette.light),
+      darkTheme: buildDarkThemeForScheme(palette.dark),
+      builder: (context, child) =>
+          AppSnackBarOverlay(child: child ?? const SizedBox.shrink()),
+      home: RestoreOutcomeNotice(
+        outcome: restoreOutcome,
+        child: HiveToSqliteMigrationPage(service: service),
+      ),
+    );
+  }
+}
+
+class MyApp extends StatelessWidget {
+  const MyApp({
+    super.key,
+    required this.databaseLease,
+    required this.businessPreferences,
+    this.restoreOutcome,
+  });
+
+  final ChatDatabaseLease databaseLease;
+  final BusinessPreferences businessPreferences;
+  final RestoreReceiptState? restoreOutcome;
+
+  @override
+  Widget build(BuildContext context) {
+    return MultiProvider(
+      providers: [
+        Provider<BusinessRepository>.value(
+          value: databaseLease.businessRepository,
+        ),
+        Provider<BusinessPreferences>.value(value: businessPreferences),
+        ChangeNotifierProvider(
+          create: (_) => UserProvider(preferences: businessPreferences),
+        ),
+        ChangeNotifierProvider(
+          create: (_) {
+            final settings = SettingsProvider(businessPreferences);
+            unawaited(
+              settings.loaded.then((_) => settings.incrementAppLaunchCount()),
+            );
+            return settings;
+          },
+        ),
+        ChangeNotifierProvider(
+          create: (_) =>
+              ChatService(existingRepository: databaseLease.chatRepository),
+        ),
+        ChangeNotifierProvider(create: (_) => McpToolService()),
+        ChangeNotifierProvider(
+          create: (_) => McpProvider(preferences: businessPreferences),
+        ),
+        ChangeNotifierProvider(create: (_) => ToolApprovalService()),
+        ChangeNotifierProvider(create: (_) => AskUserInteractionService()),
+        ChangeNotifierProvider(
+          create: (ctx) => AssistantProvider(
+            preferences: businessPreferences,
+            chatService: ctx.read<ChatService>(),
+          ),
+        ),
+        ChangeNotifierProvider(
+          create: (_) => TagProvider(preferences: businessPreferences),
+        ),
+        ChangeNotifierProvider(
+          create: (_) => TtsProvider(preferences: businessPreferences),
+        ),
+        ChangeNotifierProvider(create: (_) => UpdateProvider()),
+        ChangeNotifierProvider(create: (_) => BleConfigStore()),
+        ChangeNotifierProvider(create: (_) => BleManager()),
+        ChangeNotifierProvider(create: (_) => ServerConfigStore()),
+        ChangeNotifierProvider(
+          create: (_) => QuickPhraseProvider(preferences: businessPreferences),
+        ),
+        ChangeNotifierProvider(
+          create: (_) =>
+              InstructionInjectionProvider(preferences: businessPreferences),
+        ),
+        ChangeNotifierProvider(
+          create: (_) => InstructionInjectionGroupProvider(
+            preferences: businessPreferences,
+          ),
+        ),
+        ChangeNotifierProvider(
+          create: (_) => WorldBookProvider(preferences: businessPreferences),
+        ),
+        ChangeNotifierProvider(
+          create: (_) => MemoryProvider(preferences: businessPreferences),
+        ),
+        ChangeNotifierProvider(
+          create: (_) =>
+              BackupReminderProvider(preferences: businessPreferences),
+        ),
+        // Desktop hotkeys provider
+        ChangeNotifierProvider(create: (_) => HotkeyProvider()),
+        ChangeNotifierProvider(
+          create: (ctx) => BackupProvider(
+            chatService: ctx.read<ChatService>(),
+            businessRepository: databaseLease.businessRepository,
+            businessPreferences: businessPreferences,
+            initialConfig: ctx.read<SettingsProvider>().webDavConfig,
+          ),
+        ),
+        ChangeNotifierProvider(
+          create: (ctx) => S3BackupProvider(
+            chatService: ctx.read<ChatService>(),
+            businessRepository: databaseLease.businessRepository,
+            businessPreferences: businessPreferences,
+            initialConfig: ctx.read<SettingsProvider>().s3Config,
+          ),
+        ),
+        ChangeNotifierProvider(create: (_) => CustomThemeStore()),
+      ],
+      child: Builder(
+        builder: (context) {
+          final settings = context.watch<SettingsProvider>();
+          // Apply global proxy overrides when settings change
+          settings.applyGlobalProxyOverridesIfNeeded();
+          // Lazily ensure system fonts only if user selected a system family (desktop only)
+          // Load ONLY selected families to avoid huge memory from loading all system fonts.
+          WidgetsBinding.instance.addPostFrameCallback((_) async {
+            try {
+              final isDesktop =
+                  !kIsWeb &&
+                  (defaultTargetPlatform == TargetPlatform.windows ||
+                      defaultTargetPlatform == TargetPlatform.macOS ||
+                      defaultTargetPlatform == TargetPlatform.linux);
+              if (!isDesktop) return;
+              // Selected system app/code fonts (not Google, not local alias)
+              final wantsAppSystem =
+                  (settings.appFontFamily?.isNotEmpty == true) &&
+                  !settings.appFontIsGoogle &&
+                  (settings.appFontLocalAlias == null ||
+                      settings.appFontLocalAlias!.isEmpty);
+              final wantsCodeSystem =
+                  (settings.codeFontFamily?.isNotEmpty == true) &&
+                  !settings.codeFontIsGoogle &&
+                  (settings.codeFontLocalAlias == null ||
+                      settings.codeFontLocalAlias!.isEmpty);
+              if (wantsAppSystem || wantsCodeSystem) {
+                final sf = SystemFonts();
+                if (wantsAppSystem) {
+                  final fam = settings.appFontFamily!;
+                  try {
+                    await sf.loadFont(fam);
+                  } catch (_) {}
+                }
+                if (wantsCodeSystem) {
+                  final fam = settings.codeFontFamily!;
+                  try {
+                    if (fam != settings.appFontFamily) await sf.loadFont(fam);
+                  } catch (_) {}
+                }
+              }
+            } catch (_) {}
+          });
+          // One-time app update check after first build
+          if (settings.showAppUpdates && !_didCheckUpdates) {
+            _didCheckUpdates = true;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              try {
+                context.read<UpdateProvider>().checkForUpdates();
+              } catch (_) {}
+            });
+          }
+          return DynamicColorBuilder(
+            builder: (lightDynamic, darkDynamic) {
+              // if (lightDynamic != null) {
+              //   debugPrint('[DynamicColor] Light dynamic detected. primary=${lightDynamic.primary.value.toRadixString(16)} surface=${lightDynamic.surface.value.toRadixString(16)}');
+              // } else {
+              //   debugPrint('[DynamicColor] Light dynamic not available');
+              // }
+              // if (darkDynamic != null) {
+              //   debugPrint('[DynamicColor] Dark dynamic detected. primary=${darkDynamic.primary.value.toRadixString(16)} surface=${darkDynamic.surface.value.toRadixString(16)}');
+              // } else {
+              //   debugPrint('[DynamicColor] Dark dynamic not available');
+              // }
+              final isAndroid =
+                  Theme.of(context).platform == TargetPlatform.android;
+              // Update dynamic color capability for settings UI (avoid notify during build)
+              final dynSupported =
+                  isAndroid && (lightDynamic != null || darkDynamic != null);
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                try {
+                  settings.setDynamicColorSupported(dynSupported);
+                } catch (_) {}
+              });
+
+              // Initialize desktop hotkeys on supported platforms
+              WidgetsBinding.instance.addPostFrameCallback((_) async {
+                try {
+                  final isDesktop =
+                      !kIsWeb &&
+                      (defaultTargetPlatform == TargetPlatform.windows ||
+                          defaultTargetPlatform == TargetPlatform.macOS ||
+                          defaultTargetPlatform == TargetPlatform.linux);
+                  if (isDesktop) {
+                    await context.read<HotkeyProvider>().initialize();
+                  }
+                } catch (_) {}
+              });
+
+              // Android-only: ensure background execution matches setting and prepare notifications if needed
+              WidgetsBinding.instance.addPostFrameCallback((_) async {
+                try {
+                  if (Platform.isAndroid) {
+                    final mode = settings.androidBackgroundChatMode;
+                    if (mode != AndroidBackgroundChatMode.off) {
+                      final l10n = AppLocalizations.of(context);
+                      if (l10n == null) return;
+                      // Enable only if currently disabled to avoid duplicate ROM prompts
+                      try {
+                        final already =
+                            await AndroidBackgroundManager.isEnabled();
+                        if (!already) {
+                          await AndroidBackgroundManager.ensureInitialized(
+                            notificationTitle:
+                                l10n.androidBackgroundNotificationTitle,
+                            notificationText:
+                                l10n.androidBackgroundNotificationText,
+                          );
+                          await AndroidBackgroundManager.setEnabled(true);
+                        }
+                      } catch (_) {}
+                      if (mode == AndroidBackgroundChatMode.onNotify) {
+                        await NotificationService.ensureInitialized();
+                        await NotificationService.ensureAndroidNotificationsPermission();
+                      }
+                    }
+                  }
+                } catch (_) {}
+              });
+
+              final useDyn = isAndroid && settings.useDynamicColor;
+              final palette = ThemePalettes.byId(settings.themePaletteId);
+
+              // 自定义主题优先
+              final customStore = context.watch<CustomThemeStore>();
+              final customTheme = customStore.currentTheme;
+
+              final light = customTheme != null
+                  ? buildLightThemeForScheme(
+                      customTheme.toLightColorScheme(),
+                      pureBackground: settings.usePureBackground,
+                    )
+                  : buildLightThemeForScheme(
+                      palette.light,
+                      dynamicScheme: useDyn ? lightDynamic : null,
+                      pureBackground: settings.usePureBackground,
+                    );
+              final dark = customTheme != null
+                  ? buildDarkThemeForScheme(
+                      customTheme.toDarkColorScheme(),
+                      pureBackground: settings.usePureBackground,
+                    )
+                  : buildDarkThemeForScheme(
+                      palette.dark,
+                      dynamicScheme: useDyn ? darkDynamic : null,
+                      pureBackground: settings.usePureBackground,
+                    );
+              // Resolve effective app font family (system/Google/local alias)
+              String? effectiveAppFontFamily() {
+                final fam = settings.appFontFamily;
+                if (fam == null || fam.isEmpty) return null;
+                if (settings.appFontIsGoogle) {
+                  try {
+                    final s = GoogleFonts.getFont(fam);
+                    return s.fontFamily ?? fam;
+                  } catch (_) {
+                    return fam;
+                  }
+                }
+                return fam;
+              }
+
+              final effectiveAppFont = effectiveAppFontFamily();
+
+              // Apply user-selected app font to theme text styles and app bar
+              ThemeData applyAppFont(ThemeData base) {
+                if (effectiveAppFont == null || effectiveAppFont.isEmpty) {
+                  return base;
+                }
+                TextStyle? withFamily(TextStyle? s) =>
+                    s?.copyWith(fontFamily: effectiveAppFont);
+                TextTheme apply(TextTheme t) => t.copyWith(
+                  displayLarge: withFamily(t.displayLarge),
+                  displayMedium: withFamily(t.displayMedium),
+                  displaySmall: withFamily(t.displaySmall),
+                  headlineLarge: withFamily(t.headlineLarge),
+                  headlineMedium: withFamily(t.headlineMedium),
+                  headlineSmall: withFamily(t.headlineSmall),
+                  titleLarge: withFamily(t.titleLarge),
+                  titleMedium: withFamily(t.titleMedium),
+                  titleSmall: withFamily(t.titleSmall),
+                  bodyLarge: withFamily(t.bodyLarge),
+                  bodyMedium: withFamily(t.bodyMedium),
+                  bodySmall: withFamily(t.bodySmall),
+                  labelLarge: withFamily(t.labelLarge),
+                  labelMedium: withFamily(t.labelMedium),
+                  labelSmall: withFamily(t.labelSmall),
+                );
+                final bar = base.appBarTheme;
+                final appBar = bar.copyWith(
+                  titleTextStyle: (bar.titleTextStyle ?? const TextStyle())
+                      .copyWith(fontFamily: effectiveAppFont),
+                  toolbarTextStyle: (bar.toolbarTextStyle ?? const TextStyle())
+                      .copyWith(fontFamily: effectiveAppFont),
+                );
+                // Apply as default family to all text in ThemeData
+                return base.copyWith(
+                  textTheme: apply(base.textTheme),
+                  primaryTextTheme: apply(base.primaryTextTheme),
+                  appBarTheme: appBar,
+                );
+              }
+
+              final themedLight = applyAppFont(light);
+              final themedDark = applyAppFont(dark);
+              // Log top-level colors likely used by widgets (card/bg/shadow approximations)
+              // debugPrint('[Theme/App] Light scaffoldBg=${light.colorScheme.surface.value.toRadixString(16)} card≈${light.colorScheme.surface.value.toRadixString(16)} shadow=${light.colorScheme.shadow.value.toRadixString(16)}');
+              // debugPrint('[Theme/App] Dark scaffoldBg=${dark.colorScheme.surface.value.toRadixString(16)} card≈${dark.colorScheme.surface.value.toRadixString(16)} shadow=${dark.colorScheme.shadow.value.toRadixString(16)}');
+              return MaterialApp(
+                debugShowCheckedModeBanner: false,
+                title: 'Kelivo',
+                navigatorKey: rootNavigatorKey,
+                // App UI language; null = follow system (respects iOS per-app language)
+                locale: settings.appLocaleForMaterialApp,
+                supportedLocales: AppLocalizations.supportedLocales,
+                localizationsDelegates: AppLocalizations.localizationsDelegates,
+                theme: themedLight,
+                darkTheme: themedDark,
+                themeMode: settings.themeMode,
+                navigatorObservers: <NavigatorObserver>[routeObserver],
+                home: RestoreOutcomeNotice(
+                  outcome: restoreOutcome,
+                  child: _selectHome(),
+                ),
+                builder: (ctx, child) {
+                  final bright = Theme.of(ctx).brightness;
+                  final overlay = bright == Brightness.dark
+                      ? const SystemUiOverlayStyle(
+                          statusBarColor: Colors.transparent,
+                          statusBarIconBrightness: Brightness.light,
+                          statusBarBrightness: Brightness.dark,
+                          systemNavigationBarColor: Colors.transparent,
+                          systemNavigationBarIconBrightness: Brightness.light,
+                          systemNavigationBarDividerColor: Colors.transparent,
+                          systemNavigationBarContrastEnforced: false,
+                        )
+                      : const SystemUiOverlayStyle(
+                          statusBarColor: Colors.transparent,
+                          statusBarIconBrightness: Brightness.dark,
+                          statusBarBrightness: Brightness.light,
+                          systemNavigationBarColor: Colors.transparent,
+                          systemNavigationBarIconBrightness: Brightness.dark,
+                          systemNavigationBarDividerColor: Colors.transparent,
+                          systemNavigationBarContrastEnforced: false,
+                        );
+                  // Ensure localized defaults (assistants and chat default title) after first frame
+                  if (!_didEnsureAssistants) {
+                    _didEnsureAssistants = true;
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      try {
+                        ctx.read<AssistantProvider>().ensureDefaults(ctx);
+                      } catch (_) {}
+                      try {
+                        ctx.read<ChatService>().setDefaultConversationTitle(
+                          AppLocalizations.of(
+                            ctx,
+                          )!.chatServiceDefaultConversationTitle,
+                        );
+                      } catch (_) {}
+                      try {
+                        ctx.read<UserProvider>().setDefaultNameIfUnset(
+                          AppLocalizations.of(ctx)!.userProviderDefaultUserName,
+                        );
+                      } catch (_) {}
+                    });
+                  }
+
+                  // Desktop tray + close behaviour (minimize to tray) sync
+                  final l10n = AppLocalizations.of(ctx);
+                  if (l10n != null) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) async {
+                      try {
+                        final isDesktop =
+                            !kIsWeb &&
+                            (defaultTargetPlatform == TargetPlatform.windows ||
+                                defaultTargetPlatform == TargetPlatform.macOS ||
+                                defaultTargetPlatform == TargetPlatform.linux);
+                        if (!isDesktop) return;
+                        final sp = ctx.read<SettingsProvider>();
+                        await DesktopTrayController.instance.syncFromSettings(
+                          l10n,
+                          showTray: sp.desktopShowTray,
+                          minimizeToTrayOnClose:
+                              sp.desktopMinimizeToTrayOnClose,
+                        );
+                      } catch (_) {}
+                    });
+                  }
+
+                  final mq = MediaQuery.of(ctx);
+                  final display = View.of(ctx).display;
+                  final displaySize = display.size / display.devicePixelRatio;
+                  final isFloatingIpad =
+                      defaultTargetPlatform == TargetPlatform.iOS &&
+                      displaySize.shortestSide >= 600 &&
+                      (mq.size.shortestSide < displaySize.shortestSide - 1 ||
+                          mq.size.longestSide < displaySize.longestSide - 1);
+                  final systemTop = mq.viewPadding.top;
+                  final controlsTop = systemTop < 56 ? 56.0 : systemTop;
+                  final appWithOverlays = MediaQuery(
+                    data: isFloatingIpad
+                        ? mq.copyWith(
+                            padding: mq.padding.copyWith(top: controlsTop),
+                            viewPadding: mq.viewPadding.copyWith(
+                              top: controlsTop,
+                            ),
+                          )
+                        : mq,
+                    child: AppOverlays(child: child ?? const SizedBox.shrink()),
+                  );
+                  // Enforce app font as a default across the tree for Texts without explicit family
+                  return AnnotatedRegion<SystemUiOverlayStyle>(
+                    value: overlay,
+                    child: effectiveAppFont == null
+                        ? appWithOverlays
+                        : DefaultTextStyle.merge(
+                            style: TextStyle(fontFamily: effectiveAppFont),
+                            child: appWithOverlays,
+                          ),
+                  );
+                },
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+}
+
+Widget _selectHome() {
+  // Mobile remains the default platform. Desktop is an added platform.
+  if (kIsWeb) return const HomePage();
+  final isDesktop =
+      defaultTargetPlatform == TargetPlatform.macOS ||
+      defaultTargetPlatform == TargetPlatform.windows ||
+      defaultTargetPlatform == TargetPlatform.linux;
+  return isDesktop ? const DesktopHomePage() : const HomePage();
+}
+
+// Overrides logic is implemented within SettingsProvider now.

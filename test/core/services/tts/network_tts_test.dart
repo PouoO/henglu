@@ -1,0 +1,461 @@
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:Kelivo/core/services/tts/network_tts.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+void main() {
+  group('TtsServiceOptions', () {
+    test('deserializes RikkaHub-aligned provider defaults', () {
+      final qwen = TtsServiceOptions.fromJson({
+        'kind': 'qwen',
+        'enabled': true,
+      });
+      final groq = TtsServiceOptions.fromJson({
+        'kind': 'groq',
+        'enabled': true,
+      });
+      final xai = TtsServiceOptions.fromJson({'kind': 'xai', 'enabled': true});
+      final minimax = TtsServiceOptions.fromJson({
+        'kind': 'minimax',
+        'enabled': true,
+      });
+
+      expect(qwen, isA<QwenTtsOptions>());
+      expect(
+        (qwen as QwenTtsOptions).baseUrl,
+        'https://dashscope.aliyuncs.com/api/v1',
+      );
+      expect(qwen.model, 'qwen3-tts-flash');
+      expect(qwen.voice, 'Cherry');
+      expect(qwen.languageType, 'Auto');
+
+      expect(groq, isA<GroqTtsOptions>());
+      expect(
+        (groq as GroqTtsOptions).baseUrl,
+        'https://api.groq.com/openai/v1',
+      );
+      expect(groq.model, 'canopylabs/orpheus-v1-english');
+      expect(groq.voice, 'austin');
+
+      expect(xai, isA<XaiTtsOptions>());
+      expect((xai as XaiTtsOptions).baseUrl, 'https://api.x.ai/v1');
+      expect(xai.voiceId, 'eve');
+      expect(xai.language, 'auto');
+
+      expect(minimax, isA<MiniMaxTtsOptions>());
+      expect((minimax as MiniMaxTtsOptions).model, 'speech-2.6-turbo');
+    });
+  });
+
+  group('NetworkTtsService', () {
+    test('synthesizes Qwen SSE PCM response as wav', () async {
+      late HttpRequest captured;
+      late Map<String, dynamic> requestBody;
+      final pcm = <int>[1, 2, 3, 4];
+      final audio = base64Encode(pcm);
+      final server = await _bindServer((request) async {
+        captured = request;
+        requestBody =
+            jsonDecode(await utf8.decoder.bind(request).join())
+                as Map<String, dynamic>;
+        request.response.statusCode = HttpStatus.ok;
+        request.response.headers.contentType = ContentType(
+          'text',
+          'event-stream',
+        );
+        request.response.write(
+          'data: ${jsonEncode({
+            'output': {
+              'audio': {'data': audio},
+              'finish_reason': 'stop',
+            },
+          })}\n\n',
+        );
+        await request.response.close();
+      });
+
+      addTearDown(() async => server.close(force: true));
+
+      final result = await NetworkTtsService.synthesize(
+        options: QwenTtsOptions(
+          enabled: true,
+          name: 'Qwen',
+          apiKey: 'qwen-key',
+          baseUrl: _baseUrl(server),
+          model: 'qwen3-tts-flash',
+          voice: 'Cherry',
+          languageType: 'Chinese',
+        ),
+        text: '你好',
+      );
+
+      expect(
+        captured.uri.path,
+        '/api/v1/services/aigc/multimodal-generation/generation',
+      );
+      expect(
+        captured.headers.value(HttpHeaders.authorizationHeader),
+        'Bearer qwen-key',
+      );
+      expect(captured.headers.value('X-DashScope-SSE'), 'enable');
+      expect(requestBody['model'], 'qwen3-tts-flash');
+      expect(requestBody['input'], {
+        'text': '你好',
+        'voice': 'Cherry',
+        'language_type': 'Chinese',
+      });
+      expect(result.mime, 'audio/wav');
+      expect(result.sampleRate, 24000);
+      expect(utf8.decode(result.bytes.take(4).toList()), 'RIFF');
+    });
+
+    test('synthesizes Groq audio speech response as wav', () async {
+      late HttpRequest captured;
+      late Map<String, dynamic> requestBody;
+      final audioBytes = <int>[9, 8, 7];
+      final server = await _bindServer((request) async {
+        captured = request;
+        requestBody =
+            jsonDecode(await utf8.decoder.bind(request).join())
+                as Map<String, dynamic>;
+        request.response.statusCode = HttpStatus.ok;
+        request.response.add(audioBytes);
+        await request.response.close();
+      });
+
+      addTearDown(() async => server.close(force: true));
+
+      final result = await NetworkTtsService.synthesize(
+        options: GroqTtsOptions(
+          enabled: true,
+          name: 'Groq',
+          apiKey: 'groq-key',
+          baseUrl: _baseUrl(server),
+          model: 'canopylabs/orpheus-v1-english',
+          voice: 'austin',
+        ),
+        text: 'hello',
+      );
+
+      expect(captured.uri.path, '/api/v1/audio/speech');
+      expect(
+        captured.headers.value(HttpHeaders.authorizationHeader),
+        'Bearer groq-key',
+      );
+      expect(requestBody['model'], 'canopylabs/orpheus-v1-english');
+      expect(requestBody['input'], 'hello');
+      expect(requestBody['voice'], 'austin');
+      expect(requestBody['response_format'], 'wav');
+      expect(result.bytes, audioBytes);
+      expect(result.mime, 'audio/wav');
+    });
+
+    test('synthesizes xAI tts response as mp3', () async {
+      late HttpRequest captured;
+      late Map<String, dynamic> requestBody;
+      final audioBytes = <int>[6, 5, 4];
+      final server = await _bindServer((request) async {
+        captured = request;
+        requestBody =
+            jsonDecode(await utf8.decoder.bind(request).join())
+                as Map<String, dynamic>;
+        request.response.statusCode = HttpStatus.ok;
+        request.response.add(audioBytes);
+        await request.response.close();
+      });
+
+      addTearDown(() async => server.close(force: true));
+
+      final result = await NetworkTtsService.synthesize(
+        options: XaiTtsOptions(
+          enabled: true,
+          name: 'xAI',
+          apiKey: 'xai-key',
+          baseUrl: _baseUrl(server),
+          voiceId: 'eve',
+          language: 'zh',
+        ),
+        text: 'hello',
+      );
+
+      expect(captured.uri.path, '/api/v1/tts');
+      expect(
+        captured.headers.value(HttpHeaders.authorizationHeader),
+        'Bearer xai-key',
+      );
+      expect(requestBody, {
+        'text': 'hello',
+        'voice_id': 'eve',
+        'language': 'zh',
+      });
+      expect(result.bytes, audioBytes);
+      expect(result.mime, 'audio/mpeg');
+    });
+
+    test('synthesizes ElevenLabs response with host-only base url', () async {
+      late HttpRequest captured;
+      late Map<String, dynamic> requestBody;
+      final audioBytes = <int>[1, 3, 5];
+      final server = await _bindServer((request) async {
+        captured = request;
+        requestBody =
+            jsonDecode(await utf8.decoder.bind(request).join())
+                as Map<String, dynamic>;
+        request.response.statusCode = HttpStatus.ok;
+        request.response.add(audioBytes);
+        await request.response.close();
+      });
+
+      addTearDown(() async => server.close(force: true));
+
+      final result = await NetworkTtsService.synthesize(
+        options: ElevenLabsTtsOptions(
+          enabled: true,
+          name: 'ElevenLabs',
+          apiKey: 'eleven-key',
+          baseUrl: _hostOnlyBaseUrl(server),
+          modelId: 'eleven_multilingual_v2',
+          voiceId: 'pNInz6obpgDQGcFmaJgB',
+        ),
+        text: 'hello',
+      );
+
+      expect(captured.uri.path, '/v1/text-to-speech/pNInz6obpgDQGcFmaJgB');
+      expect(captured.uri.queryParameters['output_format'], 'mp3_44100_128');
+      expect(captured.headers.value('xi-api-key'), 'eleven-key');
+      expect(requestBody, {
+        'text': 'hello',
+        'model_id': 'eleven_multilingual_v2',
+      });
+      expect(result.bytes, audioBytes);
+      expect(result.mime, 'audio/mpeg');
+    });
+
+    test('wraps ElevenLabs PCM response as WAV with v1 base url', () async {
+      late HttpRequest captured;
+      final audioBytes = <int>[2, 4, 6, 8];
+      final server = await _bindServer((request) async {
+        captured = request;
+        await utf8.decoder.bind(request).join();
+        request.response.statusCode = HttpStatus.ok;
+        request.response.add(audioBytes);
+        await request.response.close();
+      });
+
+      addTearDown(() async => server.close(force: true));
+
+      final result = await NetworkTtsService.synthesize(
+        options: ElevenLabsTtsOptions(
+          enabled: true,
+          name: 'ElevenLabs',
+          apiKey: 'eleven-key',
+          baseUrl: _baseUrl(server),
+          modelId: 'eleven_multilingual_v2',
+          voiceId: 'pNInz6obpgDQGcFmaJgB',
+          outputFormat: 'pcm_24000',
+        ),
+        text: 'hello',
+      );
+
+      expect(captured.uri.path, '/api/v1/text-to-speech/pNInz6obpgDQGcFmaJgB');
+      expect(captured.uri.queryParameters['output_format'], 'pcm_24000');
+      expect(result.mime, 'audio/wav');
+      expect(result.sampleRate, 24000);
+      expect(utf8.decode(result.bytes.take(4).toList()), 'RIFF');
+      expect(result.bytes.sublist(44), audioBytes);
+    });
+
+    test(
+      'synthesizes MiMo streaming PCM response as wav with api-key auth',
+      () async {
+        late HttpRequest captured;
+        late Map<String, dynamic> requestBody;
+        final audio = base64Encode(<int>[3, 2, 1]);
+        final server = await _bindServer((request) async {
+          captured = request;
+          requestBody =
+              jsonDecode(await utf8.decoder.bind(request).join())
+                  as Map<String, dynamic>;
+          request.response.statusCode = HttpStatus.ok;
+          request.response.headers.contentType = ContentType(
+            'text',
+            'event-stream',
+          );
+          request.response.write(
+            'data: ${jsonEncode({
+              'choices': [
+                {
+                  'delta': {
+                    'audio': {'data': audio},
+                  },
+                },
+              ],
+            })}\n\n',
+          );
+          request.response.write('data: [DONE]\n\n');
+          await request.response.close();
+        });
+
+        addTearDown(() async => server.close(force: true));
+
+        final result = await NetworkTtsService.synthesize(
+          options: MimoTtsOptions(
+            enabled: true,
+            name: 'MiMo',
+            apiKey: 'mimo-key',
+            baseUrl: _baseUrl(server),
+            model: 'mimo-v2-tts',
+            voice: 'mimo_default',
+          ),
+          text: 'hello',
+        );
+
+        expect(captured.uri.path, '/api/v1/chat/completions');
+        expect(captured.headers.value('api-key'), 'mimo-key');
+        expect(captured.headers.value(HttpHeaders.authorizationHeader), isNull);
+        expect(requestBody['stream'], isTrue);
+        expect(requestBody['audio'], {
+          'format': 'pcm16',
+          'voice': 'mimo_default',
+        });
+        expect(result.mime, 'audio/wav');
+        expect(result.sampleRate, 24000);
+        expect(utf8.decode(result.bytes.take(4).toList()), 'RIFF');
+      },
+    );
+
+    test(
+      'throws when MiMo streaming response contains no audio chunks',
+      () async {
+        final server = await _bindServer((request) async {
+          await utf8.decoder.bind(request).join();
+          request.response.statusCode = HttpStatus.ok;
+          request.response.headers.contentType = ContentType(
+            'text',
+            'event-stream',
+          );
+          request.response.write('data: [DONE]\n\n');
+          await request.response.close();
+        });
+
+        addTearDown(() async => server.close(force: true));
+
+        expect(
+          () => NetworkTtsService.synthesize(
+            options: MimoTtsOptions(
+              enabled: true,
+              name: 'MiMo',
+              apiKey: 'mimo-key',
+              baseUrl: _baseUrl(server),
+              model: 'mimo-v2-tts',
+              voice: 'mimo_default',
+            ),
+            text: 'hello',
+          ),
+          throwsA(isA<Exception>()),
+        );
+      },
+    );
+  });
+
+  test('combines WAV data after variable RIFF chunks', () {
+    final format = _pcmFormat(24000);
+    final first = _buildWav(<(String, List<int>)>[
+      ('JUNK', <int>[9, 8, 7]),
+      ('fmt ', format),
+      ('LIST', <int>[1, 2, 3, 4]),
+      ('fact', _uint32Bytes(1)),
+      ('data', <int>[1, 2]),
+    ]);
+    final second = _buildWav(<(String, List<int>)>[
+      ('fmt ', format),
+      ('fact', _uint32Bytes(1)),
+      ('data', <int>[3, 4]),
+    ]);
+
+    final combined = combineWavAudio(<Uint8List>[first, second]);
+
+    expect(_riffChunkOffset(first, 'data'), greaterThan(44));
+    expect(_riffChunkData(combined, 'data'), <int>[1, 2, 3, 4]);
+    expect(
+      () => combineWavAudio(<Uint8List>[
+        first,
+        _buildWav(<(String, List<int>)>[
+          ('fmt ', _pcmFormat(16000)),
+          ('fact', _uint32Bytes(1)),
+          ('data', <int>[3, 4]),
+        ]),
+      ]),
+      throwsFormatException,
+    );
+  });
+}
+
+Future<HttpServer> _bindServer(
+  Future<void> Function(HttpRequest request) handler,
+) async {
+  final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+  server.listen(handler);
+  return server;
+}
+
+String _baseUrl(HttpServer server) {
+  return 'http://${server.address.address}:${server.port}/api/v1';
+}
+
+String _hostOnlyBaseUrl(HttpServer server) {
+  return 'http://${server.address.address}:${server.port}';
+}
+
+Uint8List _pcmFormat(int sampleRate) {
+  final format = ByteData(16)
+    ..setUint16(0, 1, Endian.little)
+    ..setUint16(2, 1, Endian.little)
+    ..setUint32(4, sampleRate, Endian.little)
+    ..setUint32(8, sampleRate * 2, Endian.little)
+    ..setUint16(12, 2, Endian.little)
+    ..setUint16(14, 16, Endian.little);
+  return format.buffer.asUint8List();
+}
+
+Uint8List _uint32Bytes(int value) {
+  final bytes = ByteData(4)..setUint32(0, value, Endian.little);
+  return bytes.buffer.asUint8List();
+}
+
+Uint8List _buildWav(List<(String, List<int>)> chunks) {
+  final body = BytesBuilder(copy: false)..add(utf8.encode('WAVE'));
+  for (final chunk in chunks) {
+    body
+      ..add(utf8.encode(chunk.$1))
+      ..add(_uint32Bytes(chunk.$2.length))
+      ..add(chunk.$2);
+    if (chunk.$2.length.isOdd) body.addByte(0);
+  }
+  final bodyBytes = body.takeBytes();
+  return (BytesBuilder(copy: false)
+        ..add(utf8.encode('RIFF'))
+        ..add(_uint32Bytes(bodyBytes.length))
+        ..add(bodyBytes))
+      .takeBytes();
+}
+
+int _riffChunkOffset(Uint8List wav, String id) {
+  final view = ByteData.sublistView(wav);
+  final end = 8 + view.getUint32(4, Endian.little);
+  var offset = 12;
+  while (offset + 8 <= end) {
+    if (utf8.decode(wav.sublist(offset, offset + 4)) == id) return offset;
+    final size = view.getUint32(offset + 4, Endian.little);
+    offset += 8 + size + (size.isOdd ? 1 : 0);
+  }
+  throw StateError('Missing RIFF chunk $id');
+}
+
+Uint8List _riffChunkData(Uint8List wav, String id) {
+  final offset = _riffChunkOffset(wav, id);
+  final size = ByteData.sublistView(wav).getUint32(offset + 4, Endian.little);
+  return wav.sublist(offset + 8, offset + 8 + size);
+}

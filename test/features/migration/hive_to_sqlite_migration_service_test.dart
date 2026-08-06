@@ -1,0 +1,608 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:archive/archive_io.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:hive/hive.dart';
+// ignore: depend_on_referenced_packages
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'package:Kelivo/core/models/chat_message.dart';
+import 'package:Kelivo/core/models/conversation.dart';
+import 'package:Kelivo/core/services/chat/chat_service.dart';
+import 'package:Kelivo/core/services/hive_migration_marker.dart';
+import 'package:Kelivo/features/migration/hive_to_sqlite_migration_service.dart';
+
+class _FakePathProviderPlatform extends PathProviderPlatform {
+  _FakePathProviderPlatform(this.path);
+
+  final String path;
+
+  @override
+  Future<String?> getApplicationDocumentsPath() async => path;
+
+  @override
+  Future<String?> getApplicationSupportPath() async => path;
+
+  @override
+  Future<String?> getApplicationCachePath() async => '$path/cache';
+
+  @override
+  Future<String?> getTemporaryPath() async => '$path/tmp';
+}
+
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  late Directory tempDir;
+  late PathProviderPlatform previousPathProvider;
+
+  setUp(() async {
+    tempDir = await Directory.systemTemp.createTemp(
+      'kelivo_hive_sqlite_migration_test_',
+    );
+    previousPathProvider = PathProviderPlatform.instance;
+    PathProviderPlatform.instance = _FakePathProviderPlatform(tempDir.path);
+    SharedPreferences.setMockInitialValues({
+      'provider_configs_v1': '{"openai":{"apiKey":"test-key"}}',
+      'display_chat_font_scale_v1': 1.3,
+      'pinned_chat_ids': 'discarded-chat-id',
+    });
+  });
+
+  tearDown(() async {
+    await Hive.close();
+    PathProviderPlatform.instance = previousPathProvider;
+    if (await tempDir.exists()) {
+      await tempDir.delete(recursive: true);
+    }
+  });
+
+  test('backs up Hive files and migrates chat data into SQLite', () async {
+    final conversation = Conversation(
+      id: 'conversation-1',
+      title: 'Migration Source',
+      createdAt: DateTime(2024, 1, 1),
+      updatedAt: DateTime(2024, 1, 2),
+      assistantId: 'assistant-1',
+    );
+    final userMessage = ChatMessage(
+      id: 'message-user',
+      role: 'user',
+      content: 'hello from hive',
+      conversationId: conversation.id,
+      timestamp: DateTime(2024, 1, 1, 10),
+    );
+    final assistantMessage = ChatMessage(
+      id: 'message-assistant',
+      role: 'assistant',
+      content: 'hello from sqlite',
+      conversationId: conversation.id,
+      timestamp: DateTime(2024, 1, 1, 10, 1),
+      reasoningStartAt: DateTime(2024, 1, 1, 10, 1, 2),
+      reasoningFinishedAt: DateTime(2024, 1, 1, 10, 1, 3),
+      modelId: 'model-a',
+      providerId: 'provider-a',
+      promptTokens: 3,
+      completionTokens: 5,
+    );
+    conversation.messageIds
+      ..add(userMessage.id)
+      ..add(assistantMessage.id);
+
+    _registerHiveAdapters();
+    Hive.init(tempDir.path);
+    final conversations = await Hive.openBox<Conversation>('conversations');
+    final messages = await Hive.openBox<ChatMessage>('messages');
+    final toolEvents = await Hive.openBox<dynamic>('tool_events_v1');
+    await conversations.put(conversation.id, conversation);
+    await messages.put(userMessage.id, userMessage);
+    await messages.put(assistantMessage.id, assistantMessage);
+    await toolEvents.put(assistantMessage.id, [
+      {
+        'id': 'tool-1',
+        'name': 'search',
+        'arguments': {'query': 'sqlite'},
+        'content': 'result',
+      },
+    ]);
+    await toolEvents.put('sig_${assistantMessage.id}', 'gemini-signature');
+    await conversations.close();
+    await messages.close();
+    await toolEvents.close();
+    await Hive.close();
+    await Directory('${tempDir.path}/upload').create(recursive: true);
+    await File('${tempDir.path}/upload/source.pdf').writeAsString('upload');
+    await Directory('${tempDir.path}/images').create(recursive: true);
+    await File('${tempDir.path}/images/prompt.png').writeAsBytes([1, 2, 3]);
+    await Directory('${tempDir.path}/avatars').create(recursive: true);
+    await File('${tempDir.path}/avatars/user.png').writeAsBytes([4, 5, 6]);
+    await Directory('${tempDir.path}/fonts').create(recursive: true);
+    await File('${tempDir.path}/fonts/custom.ttf').writeAsBytes([7, 8, 9]);
+
+    final decision = await HiveToSqliteMigrationService.check();
+    expect(decision.needsMigration, isTrue);
+
+    final service = HiveToSqliteMigrationService(decision);
+    final statuses = <HiveToSqliteMigrationStatus>[];
+    final sub = service.statusStream.listen(statuses.add);
+    addTearDown(sub.cancel);
+    final backupRoot = Directory('${tempDir.path}/backup-target')..createSync();
+    final backupFile = await service.backupTo(backupRoot);
+    expect(backupFile.existsSync(), isTrue);
+    expect(backupFile.path, endsWith('.zip'));
+    final inputStream = InputFileStream(backupFile.path);
+    final archive = ZipDecoder().decodeStream(inputStream);
+    addTearDown(inputStream.closeSync);
+    addTearDown(archive.clearSync);
+    final entryNames = archive.files.map((file) => file.name);
+    expect(entryNames, contains('settings.json'));
+    expect(entryNames, contains('chats.json'));
+    expect(entryNames, isNot(contains('manifest.json')));
+    expect(entryNames, isNot(contains('database/kelivo.db')));
+    expect(entryNames, contains('conversations.hive'));
+    expect(entryNames, contains('messages.hive'));
+    expect(entryNames, contains('tool_events_v1.hive'));
+    expect(entryNames, contains('upload/source.pdf'));
+    expect(entryNames, contains('images/prompt.png'));
+    expect(entryNames, contains('avatars/user.png'));
+    expect(entryNames, contains('fonts/custom.ttf'));
+    final settingsEntry = archive.findFile('settings.json');
+    expect(settingsEntry, isNotNull);
+    final settingsJson = String.fromCharCodes(settingsEntry!.readBytes()!);
+    expect(settingsJson, contains('provider_configs_v1'));
+    expect(settingsJson, contains('test-key'));
+    expect(settingsJson, isNot(contains('display_chat_font_scale_v1')));
+    expect(settingsJson, isNot(contains('pinned_chat_ids')));
+    final chatsEntry = archive.findFile('chats.json');
+    expect(chatsEntry, isNotNull);
+    final chatsJson = String.fromCharCodes(chatsEntry!.readBytes()!);
+    expect(chatsJson, contains('Migration Source'));
+    expect(chatsJson, contains('hello from sqlite'));
+    await Future<void>.delayed(Duration.zero);
+    final firstBackupStatus = statuses.firstWhere(
+      (status) => status.stage == HiveToSqliteMigrationStage.backingUp,
+    );
+    expect(firstBackupStatus.detail, 'settings.json');
+    expect(
+      statuses.where(
+        (status) => status.stage == HiveToSqliteMigrationStage.backingUp,
+      ),
+      isNot(
+        contains(
+          predicate<HiveToSqliteMigrationStatus>(
+            (status) => status.detail == 'start',
+          ),
+        ),
+      ),
+    );
+    expect(
+      statuses.any(
+        (status) =>
+            status.stage == HiveToSqliteMigrationStage.backingUp &&
+            status.backupItems.any(
+              (item) => item.state == HiveToSqliteBackupItemState.active,
+            ),
+      ),
+      isTrue,
+    );
+    final backupReadyIndex = statuses.indexWhere(
+      (status) => status.stage == HiveToSqliteMigrationStage.backupReady,
+    );
+    expect(backupReadyIndex, isNonNegative);
+    final beforeBackupReady = statuses.take(backupReadyIndex);
+    expect(
+      beforeBackupReady.any(
+        (status) => status.backupItems.any(
+          (item) => item.name == 'conversations.hive' && item.bytes > 0,
+        ),
+      ),
+      isTrue,
+    );
+    expect(
+      beforeBackupReady.any(
+        (status) => status.backupItems.any(
+          (item) => item.name == 'upload/' && item.bytes > 0,
+        ),
+      ),
+      isTrue,
+    );
+    final backupReady = statuses.lastWhere(
+      (status) => status.stage == HiveToSqliteMigrationStage.backupReady,
+    );
+    expect(
+      backupReady.backupItems.map((item) => item.state),
+      everyElement(HiveToSqliteBackupItemState.done),
+    );
+
+    await service.migrate(backupPath: backupFile.path);
+    final firstMigrationStatus = statuses.firstWhere(
+      (status) => status.stage == HiveToSqliteMigrationStage.migrating,
+    );
+    expect(firstMigrationStatus.detail, 'schema');
+    expect(firstMigrationStatus.progress, 0);
+    await service.dispose();
+
+    final afterMigration = await HiveToSqliteMigrationService.check();
+    expect(afterMigration.needsMigration, isFalse);
+    expect(
+      HiveMigrationMarker.isMigrationComplete(
+        File('${tempDir.path}/kelivo.db'),
+      ),
+      isTrue,
+    );
+
+    final chatService = ChatService();
+    await chatService.init();
+    addTearDown(chatService.close);
+
+    final migratedConversation = chatService.getConversation(conversation.id);
+    expect(migratedConversation, isNotNull);
+    expect(migratedConversation!.createdAt, conversation.createdAt);
+    expect(migratedConversation.updatedAt, conversation.updatedAt);
+    expect(chatService.getMessageCount(conversation.id), 2);
+    final migratedMessages = await chatService.loadMessages(conversation.id);
+    expect(migratedMessages.map((m) => m.content), [
+      'hello from hive',
+      'hello from sqlite',
+    ]);
+    expect(migratedMessages[0].timestamp, userMessage.timestamp);
+    expect(migratedMessages[1].timestamp, assistantMessage.timestamp);
+    final timeline = await chatService.loadActiveTimelineMessages(
+      conversation.id,
+    );
+    expect(timeline.map((message) => message.id), [
+      userMessage.id,
+      assistantMessage.id,
+    ]);
+    expect(
+      migratedMessages[1].reasoningStartAt,
+      assistantMessage.reasoningStartAt,
+    );
+    expect(
+      migratedMessages[1].reasoningFinishedAt,
+      assistantMessage.reasoningFinishedAt,
+    );
+    expect(
+      chatService.getToolEvents(assistantMessage.id).single['name'],
+      'search',
+    );
+    expect(
+      chatService.getGeminiThoughtSignature(assistantMessage.id),
+      'gemini-signature',
+    );
+  });
+
+  for (final legacyActivation in <String, Object>{
+    'instruction_injections_active_id_v1': 'learning-mode',
+    'instruction_injections_active_ids_v1': '["learning-mode","review"]',
+  }.entries) {
+    test(
+      'disaster backup preserves ${legacyActivation.key} for restoration',
+      () async {
+        SharedPreferences.setMockInitialValues({
+          legacyActivation.key: legacyActivation.value,
+        });
+        _registerHiveAdapters();
+        Hive.init(tempDir.path);
+        await Hive.openBox<Conversation>('conversations');
+        await Hive.close();
+
+        final decision = await HiveToSqliteMigrationService.check();
+        expect(decision.needsMigration, isTrue);
+        final service = HiveToSqliteMigrationService(decision);
+        addTearDown(service.dispose);
+
+        final backupRoot = Directory('${tempDir.path}/backup-target');
+        final backupFile = await service.backupTo(backupRoot);
+        final inputStream = InputFileStream(backupFile.path);
+        final archive = ZipDecoder().decodeStream(inputStream);
+        addTearDown(inputStream.closeSync);
+        addTearDown(archive.clearSync);
+
+        final settingsEntry = archive.findFile('settings.json');
+        expect(settingsEntry, isNotNull);
+        final settings =
+            jsonDecode(String.fromCharCodes(settingsEntry!.readBytes()!))
+                as Map<String, dynamic>;
+        expect(
+          settings,
+          containsPair(legacyActivation.key, legacyActivation.value),
+        );
+      },
+    );
+  }
+
+  test('migrates chat data across multiple message batches', () async {
+    const messageCount = 130;
+    final baseTime = DateTime(2024, 2, 1, 9);
+    final conversation = Conversation(
+      id: 'conversation-many',
+      title: 'Large Migration Source',
+      createdAt: baseTime,
+      updatedAt: baseTime.add(const Duration(hours: 1)),
+      assistantId: 'assistant-many',
+      mcpServerIds: ['filesystem', 'search'],
+      truncateIndex: messageCount,
+      versionSelections: {'group-12': 1},
+      summary: 'large summary',
+      lastSummarizedMessageCount: 64,
+      chatSuggestions: ['next'],
+    );
+    final messages = [
+      for (var i = 0; i < messageCount; i++)
+        ChatMessage(
+          id: 'message-$i',
+          role: i.isEven ? 'user' : 'assistant',
+          content: 'message content $i',
+          conversationId: conversation.id,
+          timestamp: baseTime.add(Duration(minutes: i)),
+          modelId: i.isOdd ? 'model-$i' : null,
+          providerId: i.isOdd ? 'provider' : null,
+          groupId: i == 110 ? 'group-12' : 'group-$i',
+          version: i == 110 ? 2 : i % 3,
+          promptTokens: i,
+          completionTokens: i + 1,
+        ),
+    ];
+    conversation.messageIds.addAll(messages.map((message) => message.id));
+
+    _registerHiveAdapters();
+    Hive.init(tempDir.path);
+    final conversations = await Hive.openBox<Conversation>('conversations');
+    final messagesBox = await Hive.openBox<ChatMessage>('messages');
+    final toolEvents = await Hive.openBox<dynamic>('tool_events_v1');
+    await conversations.put(conversation.id, conversation);
+    for (final message in messages) {
+      await messagesBox.put(message.id, message);
+    }
+    await toolEvents.put('message-129', [
+      {
+        'id': 'tool-large',
+        'name': 'batch-check',
+        'content': 'last batch result',
+      },
+    ]);
+    await toolEvents.put('sig_message-129', 'last-batch-signature');
+    await conversations.close();
+    await messagesBox.close();
+    await toolEvents.close();
+    await Hive.close();
+
+    final decision = await HiveToSqliteMigrationService.check();
+    expect(decision.needsMigration, isTrue);
+
+    final service = HiveToSqliteMigrationService(decision);
+    final statuses = <HiveToSqliteMigrationStatus>[];
+    final sub = service.statusStream.listen(statuses.add);
+    addTearDown(sub.cancel);
+    await service.migrate();
+    await service.dispose();
+
+    expect(
+      statuses
+          .where(
+            (status) =>
+                status.stage == HiveToSqliteMigrationStage.migrating &&
+                status.detail == 'messages',
+          )
+          .length,
+      greaterThanOrEqualTo(2),
+    );
+
+    final chatService = ChatService();
+    await chatService.init();
+    addTearDown(chatService.close);
+
+    final migratedConversation = chatService.getConversation(conversation.id);
+    expect(migratedConversation, isNotNull);
+    expect(migratedConversation!.mcpServerIds, ['filesystem', 'search']);
+    expect(migratedConversation.truncateIndex, messageCount - 1);
+    expect(migratedConversation.versionSelections, {'group-12': 2});
+    expect(migratedConversation.summary, 'large summary');
+    expect(migratedConversation.lastSummarizedMessageCount, 64);
+    expect(migratedConversation.chatSuggestions, ['next']);
+
+    final migratedMessages = await chatService.loadMessages(conversation.id);
+    expect(migratedMessages, hasLength(messageCount));
+    expect(migratedMessages.first.id, 'message-0');
+    expect(migratedMessages[127].id, 'message-127');
+    expect(migratedMessages.last.id, 'message-129');
+    expect(migratedMessages.last.timestamp, messages.last.timestamp);
+    expect(migratedMessages.last.modelId, messages.last.modelId);
+    expect(migratedMessages.last.promptTokens, messages.last.promptTokens);
+    final timeline = await chatService.loadActiveTimelineMessages(
+      conversation.id,
+    );
+    expect(timeline, hasLength(messageCount - 1));
+    expect(chatService.getContextStartIndex(conversation.id), messageCount - 1);
+    expect(
+      await chatService.loadSelectedContextMessages(
+        conversation.id,
+        truncateIndex: migratedConversation.truncateIndex,
+        limit: messageCount,
+      ),
+      isEmpty,
+    );
+    expect(
+      chatService.getToolEvents('message-129').single['name'],
+      'batch-check',
+    );
+    expect(
+      chatService.getGeminiThoughtSignature('message-129'),
+      'last-batch-signature',
+    );
+  });
+
+  test('repairs duplicate versions and preserves selection identity', () async {
+    final baseTime = DateTime(2024, 3, 1, 9);
+    final conversation = Conversation(
+      id: 'conversation-dup-versions',
+      title: 'Duplicate Versions Source',
+      createdAt: baseTime,
+      updatedAt: baseTime.add(const Duration(hours: 1)),
+      versionSelections: {'dup-group': 1},
+    );
+    final messages = [
+      ChatMessage(
+        id: 'dup-a',
+        role: 'assistant',
+        content: 'first take',
+        conversationId: conversation.id,
+        timestamp: baseTime,
+        groupId: 'dup-group',
+        version: 0,
+      ),
+      ChatMessage(
+        id: 'dup-b',
+        role: 'assistant',
+        content: 'second take',
+        conversationId: conversation.id,
+        timestamp: baseTime.add(const Duration(minutes: 1)),
+        groupId: 'dup-group',
+        version: 0,
+      ),
+      // '' is stored verbatim and is a real value to the SQLite unique
+      // (conversationId, groupId, version) index, so empty-string groups
+      // need the same version repair as named groups.
+      ChatMessage(
+        id: 'empty-a',
+        role: 'assistant',
+        content: 'empty group first',
+        conversationId: conversation.id,
+        timestamp: baseTime.add(const Duration(minutes: 2)),
+        groupId: '',
+        version: 0,
+      ),
+      ChatMessage(
+        id: 'empty-b',
+        role: 'assistant',
+        content: 'empty group second',
+        conversationId: conversation.id,
+        timestamp: baseTime.add(const Duration(minutes: 3)),
+        groupId: '',
+        version: 0,
+      ),
+    ];
+    conversation.messageIds.addAll(messages.map((message) => message.id));
+
+    _registerHiveAdapters();
+    Hive.init(tempDir.path);
+    final conversations = await Hive.openBox<Conversation>('conversations');
+    final messagesBox = await Hive.openBox<ChatMessage>('messages');
+    await conversations.put(conversation.id, conversation);
+    for (final message in messages) {
+      await messagesBox.put(message.id, message);
+    }
+    await conversations.close();
+    await messagesBox.close();
+    await Hive.close();
+
+    final decision = await HiveToSqliteMigrationService.check();
+    expect(decision.needsMigration, isTrue);
+
+    final service = HiveToSqliteMigrationService(decision);
+    await service.migrate();
+    await service.dispose();
+
+    final chatService = ChatService();
+    await chatService.init();
+    addTearDown(chatService.close);
+
+    final migrated = await chatService.loadMessages(conversation.id);
+    expect(migrated.map((m) => m.id).toList(), [
+      'dup-a',
+      'dup-b',
+      'empty-a',
+      'empty-b',
+    ]);
+    expect(
+      migrated
+          .where((m) => m.groupId == 'dup-group')
+          .map((m) => m.version)
+          .toSet(),
+      {0, 1},
+    );
+    expect(
+      migrated.where((m) => m.groupId == '').map((m) => m.version).toSet(),
+      {0, 1},
+    );
+    expect(chatService.getConversation(conversation.id)?.versionSelections, {
+      'dup-group': 1,
+    });
+    final timeline = await chatService.loadActiveTimelineMessages(
+      conversation.id,
+    );
+    expect(
+      timeline.singleWhere((message) => message.groupId == 'dup-group').id,
+      'dup-b',
+    );
+  });
+
+  test(
+    'failed migration removes the leftover .migrating database family',
+    () async {
+      _registerHiveAdapters();
+      Hive.init(tempDir.path);
+      final conversations = await Hive.openBox<Conversation>('conversations');
+      await conversations.close();
+      await Hive.close();
+      // A directory at the target path makes the final replace step fail
+      // after the temporary database was fully written.
+      await Directory('${tempDir.path}/kelivo.db').create();
+      final staleTemp = File('${tempDir.path}/kelivo.db.migrating');
+      final staleWal = File('${tempDir.path}/kelivo.db.migrating-wal');
+
+      final service = HiveToSqliteMigrationService(
+        HiveToSqliteMigrationDecision(
+          needsMigration: true,
+          appDataDir: tempDir,
+          sqliteFile: File('${tempDir.path}/kelivo.db'),
+          hiveFiles: [File('${tempDir.path}/conversations.hive')],
+        ),
+      );
+      addTearDown(service.dispose);
+
+      await expectLater(service.migrate(), throwsA(anything));
+      expect(await staleTemp.exists(), isFalse);
+      expect(await staleWal.exists(), isFalse);
+    },
+  );
+
+  test(
+    'does not show empty resource directories in initial backup items',
+    () async {
+      final hiveFile = File('${tempDir.path}/conversations.hive');
+      await hiveFile.writeAsBytes([1, 2, 3]);
+      await Directory('${tempDir.path}/upload').create(recursive: true);
+      await Directory('${tempDir.path}/fonts').create(recursive: true);
+
+      final service = HiveToSqliteMigrationService(
+        HiveToSqliteMigrationDecision(
+          needsMigration: true,
+          appDataDir: tempDir,
+          sqliteFile: File('${tempDir.path}/kelivo.db'),
+          hiveFiles: [hiveFile],
+        ),
+      );
+
+      final itemNames = service.initialStatus().backupItems.map(
+        (item) => item.name,
+      );
+      expect(itemNames, contains('conversations.hive'));
+      expect(itemNames, isNot(contains('upload/')));
+      expect(itemNames, isNot(contains('fonts/')));
+      await service.dispose();
+    },
+  );
+}
+
+void _registerHiveAdapters() {
+  if (!Hive.isAdapterRegistered(0)) {
+    Hive.registerAdapter(ChatMessageAdapter());
+  }
+  if (!Hive.isAdapterRegistered(1)) {
+    Hive.registerAdapter(ConversationAdapter());
+  }
+}
