@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../icons/lucide_adapter.dart';
 import '../../ble/ble_config_store.dart';
+import 'ble_scan_page.dart';
 
 /// BLE 设备配置列表页。
 ///
@@ -30,6 +31,10 @@ class _BleConfigPageState extends State<BleConfigPage> {
       appBar: AppBar(
         title: const Text('BLE 设备'),
         actions: [
+          IconButton(
+            icon: const Icon(Lucide.Search),
+            onPressed: () => _openScan(context),
+          ),
           IconButton(
             icon: const Icon(Lucide.Plus),
             onPressed: () => _editConfig(context, null),
@@ -120,6 +125,10 @@ class _BleConfigPageState extends State<BleConfigPage> {
           ),
         ],
       ),
+    );
+  void _openScan(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const BleScanPage()),
     );
   }
 }

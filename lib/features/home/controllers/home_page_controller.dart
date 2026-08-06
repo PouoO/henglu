@@ -43,6 +43,8 @@ import '../services/translation_service.dart';
 import '../services/file_upload_service.dart';
 import '../widgets/chat_input_bar.dart';
 import '../../model/widgets/model_select_sheet.dart';
+import '../../settings/services/ai_theme_service.dart';
+import '../../../theme/custom_theme_store.dart';
 
 enum ChatSelectionMode { share, delete }
 
@@ -782,6 +784,11 @@ class HomePageController extends ChangeNotifier {
       return ChatInputSubmissionResult.rejected;
     }
     _warmupSerial++;
+
+    // 处理聊天中的 slash 命令
+    final slashResult = await _handleSlashCommand(content);
+    if (slashResult != null) return slashResult;
+
     final editState = _userMessageEditState;
     if (editState != null) {
       final newMsg = await _saveEditedUserMessageVersion(input, editState);
@@ -799,6 +806,47 @@ class HomePageController extends ChangeNotifier {
       notifyListeners();
     }
     return result;
+  }
+
+  /// 处理聊天中的 slash 命令。返回非 null 表示已处理，不再走正常发送流程。
+  Future<ChatInputSubmissionResult?> _handleSlashCommand(String content) async {
+    if (!content.startsWith('/theme ')) return null;
+    final prompt = content.substring('/theme '.length).trim();
+    if (prompt.isEmpty) return null;
+
+    final settings = _context.read<SettingsProvider>();
+    final providerKey = settings.currentModelProvider;
+    final modelId = settings.currentModelId;
+    if (providerKey == null || modelId == null) {
+      AppSnackBar.show(_context, message: '未配置模型，无法生成主题');
+      return ChatInputSubmissionResult.rejected;
+    }
+    final config = settings.getProviderConfig(providerKey);
+    if (config == null) {
+      AppSnackBar.show(_context, message: '找不到当前 provider 配置');
+      return ChatInputSubmissionResult.rejected;
+    }
+
+    AppSnackBar.show(_context, message: '正在生成主题...');
+    try {
+      final theme = await AiThemeService.generateTheme(
+        prompt: prompt,
+        config: config,
+        modelId: modelId,
+      );
+      if (!_context.mounted) return ChatInputSubmissionResult.rejected;
+      final store = _context.read<CustomThemeStore>();
+      store.tryOn(theme);
+      await store.commit();
+      AppSnackBar.show(_context, message: '主题已生成并应用');
+      return ChatInputSubmissionResult.sent;
+    } on AiThemeException catch (e) {
+      AppSnackBar.show(_context, message: e.message);
+      return ChatInputSubmissionResult.rejected;
+    } catch (e) {
+      AppSnackBar.show(_context, message: '生成主题失败: $e');
+      return ChatInputSubmissionResult.rejected;
+    }
   }
 
   Future<void> sendSuggestion(String suggestion) async {
