@@ -74,7 +74,7 @@ class AiThemeService {
 4. 主题名称直接取用户描述的首句。
 
 用户描述：$userPrompt
-'.trim();
+'''.trim();
   }
 
   static String? _extractJson(String text) {

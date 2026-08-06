@@ -26,7 +26,7 @@ import '../../../core/services/haptics.dart';
 import 'package:Kelivo/theme/app_font_weights.dart';
 import 'ble_config_page.dart';
 import 'server_config_page.dart';
-import '../settings/services/background_keepalive_store.dart';
+import '../services/background_keepalive_store.dart';
 
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key});

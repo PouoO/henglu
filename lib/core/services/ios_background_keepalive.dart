@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:audioplayers/audioplayers.dart';
-import 'package:audio_session/audio_session.dart';
+import 'package:audio_session/audio_session.dart' as asession;
 import 'package:flutter/services.dart';
 
 /// 通用后台保活服务。
@@ -26,11 +26,11 @@ class IosBackgroundKeepAlive {
   /// 初始化音频会话。应用启动时调用一次即可。
   Future<void> initialize() async {
     if (!kIsWeb && Platform.isIOS) {
-      final session = await AudioSession.instance;
-      await session.configure(const AudioSessionConfiguration(
-        avAudioSessionCategory: AVAudioSessionCategory.playback,
-        avAudioSessionCategoryOptions: AVAudioSessionCategoryOptions.mixWithOthers,
-        avAudioSessionMode: AVAudioSessionMode.defaultMode,
+      final session = await asession.AudioSession.instance;
+      await session.configure(const asession.AudioSessionConfiguration(
+        avAudioSessionCategory: asession.AVAudioSessionCategory.playback,
+        avAudioSessionCategoryOptions: asession.AVAudioSessionCategoryOptions.mixWithOthers,
+        avAudioSessionMode: asession.AVAudioSessionMode.defaultMode,
       ));
       _initialized = true;
     }

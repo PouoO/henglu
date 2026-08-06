@@ -111,7 +111,7 @@ class BleManager extends ChangeNotifier {
     });
 
     try {
-      await dev.connect(timeout: Duration(seconds: _config!.connectTimeout));
+      await dev.connect(timeout: Duration(seconds: _config!.connectTimeout), license: License.free);
     } catch (e) {
       _setError('连接失败: $e');
     }
@@ -242,7 +242,7 @@ class BleManager extends ChangeNotifier {
         if (_device != null && _config != null) {
           try {
             await _device!
-                .connect(timeout: Duration(seconds: _config!.connectTimeout));
+                .connect(timeout: Duration(seconds: _config!.connectTimeout), license: License.free);
             _reconnectTimer?.cancel();
           } catch (_) {
             // 继续重试
