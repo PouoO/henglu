@@ -26,6 +26,7 @@ import '../../../core/services/haptics.dart';
 import 'package:Kelivo/theme/app_font_weights.dart';
 import 'ble_config_page.dart';
 import 'server_config_page.dart';
+import '../settings/services/background_keepalive_store.dart';
 
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key});
@@ -174,6 +175,8 @@ class SettingsPage extends StatelessWidget {
                   );
                 },
               ),
+              _iosDivider(context),
+              _iosKeepAliveSwitchRow(context),
               _iosDivider(context),
               _iosNavRow(
                 context,
@@ -448,6 +451,54 @@ class SettingsPage extends StatelessWidget {
 }
 
 // --- iOS-style widgets for Settings page ---
+
+Widget _iosKeepAliveSwitchRow(BuildContext context) {
+  final cs = Theme.of(context).colorScheme;
+  return _TactileRow(
+    onTap: () {
+      final store = context.read<BackgroundKeepAliveStore>();
+      store.setEnabled(!store.enabled);
+    },
+    builder: (pressed) {
+      final baseColor = cs.onSurface.withValues(alpha: 0.9);
+      return _AnimatedPressColor(
+        pressed: pressed,
+        base: baseColor,
+        builder: (c) => Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          child: Row(
+            children: [
+              Icon(Lucide.Activity, size: 22, color: cs.onSurface.withValues(alpha: 0.7)),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('后台保活',
+                        style: TextStyle(fontSize: 15, color: c)),
+                    Text('iOS 切后台时播放无声音频，保持连接',
+                        style: TextStyle(
+                            fontSize: 12,
+                            color: cs.onSurface.withValues(alpha: 0.5))),
+                  ],
+                ),
+              ),
+              Builder(
+                builder: (ctx) {
+                  final store = ctx.watch<BackgroundKeepAliveStore>();
+                  return Switch(
+                    value: store.enabled,
+                    onChanged: (v) => store.setEnabled(v),
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+      );
+    },
+  );
+}
 
 Widget _iosSectionCard({required List<Widget> children}) {
   return Builder(

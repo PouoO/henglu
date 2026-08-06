@@ -10,6 +10,7 @@ import '../../../shared/widgets/ios_switch.dart';
 import '../../../core/services/haptics.dart';
 import 'package:Kelivo/theme/app_font_weights.dart';
 import 'custom_theme_editor_page.dart';
+import 'ai_theme_generator_page.dart';
 
 class ThemeSettingsPage extends StatelessWidget {
   const ThemeSettingsPage({super.key});
@@ -107,6 +108,41 @@ class ThemeSettingsPage extends StatelessWidget {
                           const SizedBox(width: 16),
                           Expanded(
                             child: Text('自定义主题',
+                                style: TextStyle(fontSize: 15, color: c)),
+                          ),
+                          Icon(Lucide.ChevronRight,
+                              size: 18,
+                              color: cs.onSurface.withValues(alpha: 0.3)),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+              _iosDivider(context),
+              _TactileRow(
+                onTap: () {
+                  Haptics.soft();
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const AiThemeGeneratorPage(),
+                    ),
+                  );
+                },
+                builder: (pressed) {
+                  final baseColor = cs.onSurface.withValues(alpha: 0.9);
+                  return _AnimatedPressColor(
+                    pressed: pressed,
+                    base: baseColor,
+                    builder: (c) => Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 12),
+                      child: Row(
+                        children: [
+                          Icon(Lucide.Sparkles, size: 20, color: cs.primary),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: Text('AI 生成主题',
                                 style: TextStyle(fontSize: 15, color: c)),
                           ),
                           Icon(Lucide.ChevronRight,
