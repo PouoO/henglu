@@ -39,6 +39,8 @@ import '../../../desktop/desktop_context_menu.dart';
 import '../../../desktop/menu_anchor.dart';
 import '../../../shared/widgets/emoji_text.dart';
 import '../../../theme/app_font_weights.dart';
+import '../../rooms/room_store.dart';
+import '../../rooms/widgets/room_filter_bar.dart';
 import '../../../core/providers/tag_provider.dart';
 import '../../assistant/widgets/assistant_select_sheet.dart';
 import '../../../desktop/hotkeys/sidebar_tab_bus.dart';
@@ -2070,12 +2072,19 @@ class _SideDrawerState extends State<SideDrawer> with TickerProviderStateMixin {
                       final assistantId = context
                           .watch<AssistantProvider>()
                           .currentAssistantId;
+                      final roomStore = context.watch<RoomStore>();
+                      final selectedRoom = roomStore.selectedRoom;
+                      final roomConversationIds = selectedRoom?.conversationIds.toSet();
                       final conversations = chatService
                           .getAllConversations()
                           .where(
                             (c) =>
                                 c.assistantId == assistantId ||
                                 c.assistantId == null,
+                          )
+                          .where((c) =>
+                              roomConversationIds == null ||
+                              roomConversationIds.contains(c.id),
                           )
                           .toList();
                       // Use last-activity time (updatedAt) for ordering and grouping
@@ -3442,6 +3451,12 @@ class _SideDrawerState extends State<SideDrawer> with TickerProviderStateMixin {
       }
     }
 
+    children.add(
+      const Padding(
+        padding: EdgeInsets.only(bottom: 8),
+        child: RoomFilterBar(),
+      ),
+    );
     children.add(
       PageTransitionSwitcher(
         duration: const Duration(milliseconds: 260),
