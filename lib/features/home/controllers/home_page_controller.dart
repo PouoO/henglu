@@ -818,16 +818,19 @@ class HomePageController extends ChangeNotifier {
     final providerKey = settings.currentModelProvider;
     final modelId = settings.currentModelId;
     if (providerKey == null || modelId == null) {
-      AppSnackBar.show(_context, message: '未配置模型，无法生成主题');
+      AppSnackBarManager().show(_context,
+          AppNotification(message: '未配置模型，无法生成主题'));
       return ChatInputSubmissionResult.rejected;
     }
     final config = settings.getProviderConfig(providerKey);
     if (config == null) {
-      AppSnackBar.show(_context, message: '找不到当前 provider 配置');
+      AppSnackBarManager().show(_context,
+          AppNotification(message: '找不到当前 provider 配置'));
       return ChatInputSubmissionResult.rejected;
     }
 
-    AppSnackBar.show(_context, message: '正在生成主题...');
+    AppSnackBarManager().show(_context,
+        AppNotification(message: '正在生成主题...'));
     try {
       final theme = await AiThemeService.generateTheme(
         prompt: prompt,
@@ -838,13 +841,16 @@ class HomePageController extends ChangeNotifier {
       final store = _context.read<CustomThemeStore>();
       store.tryOn(theme);
       await store.commit();
-      AppSnackBar.show(_context, message: '主题已生成并应用');
+      AppSnackBarManager().show(_context,
+          AppNotification(message: '主题已生成并应用'));
       return ChatInputSubmissionResult.sent;
     } on AiThemeException catch (e) {
-      AppSnackBar.show(_context, message: e.message);
+      AppSnackBarManager().show(_context,
+          AppNotification(message: e.message));
       return ChatInputSubmissionResult.rejected;
     } catch (e) {
-      AppSnackBar.show(_context, message: '生成主题失败: $e');
+      AppSnackBarManager().show(_context,
+          AppNotification(message: '生成主题失败: $e'));
       return ChatInputSubmissionResult.rejected;
     }
   }
