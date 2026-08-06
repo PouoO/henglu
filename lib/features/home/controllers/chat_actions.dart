@@ -20,6 +20,7 @@ import '../../../utils/markdown_media_sanitizer.dart';
 import '../services/ask_user_interaction_service.dart';
 import '../services/message_generation_service.dart';
 import '../services/tool_approval_service.dart';
+import '../../group_chat/group_chat_store.dart';
 import 'active_streaming_message_store.dart';
 import 'chat_controller.dart';
 import 'generation_controller.dart';
@@ -1037,12 +1038,48 @@ class ChatActions {
         return ChatActionResult.success(assistantMessage);
       }
       await _executeGeneration(ctx);
+      await _maybeGenerateGroupResponses(
+        conversation: conversation,
+        anchorAssistantMessage: assistantMessage,
+      );
       return ChatActionResult.success(assistantMessage);
     } catch (e) {
       // Ensure file processing indicator is cleared on error
       onFileProcessingFinished?.call();
       await _finishPreparingMessage(conversation.id, assistantMessage);
       return ChatActionResult.error(e.toString());
+    }
+  }
+
+  /// After the primary assistant reply finishes, generate additional replies
+  /// for every other member of a group chat.
+  Future<void> _maybeGenerateGroupResponses({
+    required Conversation conversation,
+    required ChatMessage anchorAssistantMessage,
+  }) async {
+    final groupChatStore = contextProvider.read<GroupChatStore>();
+    final group = groupChatStore.forConversation(conversation.id);
+    if (group == null || group.assistantIds.length <= 1) return;
+
+    final assistantProvider = contextProvider.read<AssistantProvider>();
+    final originalId = assistantProvider.currentAssistantId;
+    try {
+      for (final memberId in group.assistantIds) {
+        if (memberId == originalId) continue;
+        if (assistantProvider.getById(memberId) == null) continue;
+        await assistantProvider.setCurrentAssistant(memberId);
+        await regenerateAtMessage(
+          message: anchorAssistantMessage,
+          conversation: conversation,
+          assistantAsNewReply: true,
+          allowImagesApiRouting: true,
+        );
+      }
+    } finally {
+      if (assistantProvider.currentAssistantId != originalId &&
+          originalId != null) {
+        await assistantProvider.setCurrentAssistant(originalId);
+      }
     }
   }
 

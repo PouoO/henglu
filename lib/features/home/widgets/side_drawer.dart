@@ -3836,25 +3836,35 @@ class _ChatTileState extends State<_ChatTile> {
               8,
               _isDesktop ? 9 : 10,
             ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    widget.chat.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: _isDesktop ? 14 : 15,
-                      color: widget.textColor,
-                      fontWeight: AppFontWeights.regular,
+            child: Builder(
+              builder: (context) {
+                final groupChatStore = context.watch<GroupChatStore>();
+                final groupChat = groupChatStore.forConversation(widget.chat.id);
+                return Row(
+                  children: [
+                    if (groupChat != null) ...[
+                      Icon(Lucide.User, size: 14, color: cs.primary),
+                      const SizedBox(width: 6),
+                    ],
+                    Expanded(
+                      child: Text(
+                        groupChat?.name ?? widget.chat.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: _isDesktop ? 14 : 15,
+                          color: widget.textColor,
+                          fontWeight: AppFontWeights.regular,
+                        ),
+                      ),
                     ),
-                  ),
-                ),
-                if (widget.loading) ...[
-                  const SizedBox(width: 8),
-                  _LoadingDot(),
-                ],
-              ],
+                    if (widget.loading) ...[
+                      const SizedBox(width: 8),
+                      _LoadingDot(),
+                    ],
+                  ],
+                );
+              },
             ),
           ),
         ),

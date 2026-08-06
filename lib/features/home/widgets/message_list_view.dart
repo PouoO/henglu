@@ -18,6 +18,7 @@ import '../controllers/streaming_content_notifier.dart';
 import '../controllers/message_render_model.dart';
 import '../controllers/scroll_controller.dart' as scroll_ctrl;
 import '../services/ask_user_interaction_service.dart';
+import '../../../core/providers/assistant_provider.dart';
 import '../utils/chat_layout_constants.dart';
 import 'model_icon.dart';
 
@@ -229,6 +230,24 @@ class MessageListView extends StatefulWidget {
 
   @override
   State<MessageListView> createState() => _MessageListViewState();
+}
+
+Assistant? _assistantForMessage(
+  BuildContext context,
+  ChatMessage message,
+  Assistant? fallback,
+) {
+  if (message.role != 'assistant') return null;
+  final provider = context.read<AssistantProvider>();
+  final match = provider.assistants.firstWhere(
+    (a) =>
+        a.chatModelId != null &&
+        a.chatModelProvider != null &&
+        a.chatModelId == message.modelId &&
+        a.chatModelProvider == message.providerId,
+    orElse: () => fallback,
+  );
+  return match;
 }
 
 class _MessageListViewState extends State<MessageListView> {
@@ -1084,9 +1103,11 @@ class _MessageListViewState extends State<MessageListView> {
       useAssistantAvatar: useAssistAvatar && message.role == 'assistant',
       useAssistantName: useAssistName && message.role == 'assistant',
       assistantName: (useAssistAvatar || useAssistName)
-          ? (assistant?.name ?? 'Assistant')
+          ? (_assistantForMessage(context, message, assistant)?.name ?? 'Assistant')
           : null,
-      assistantAvatar: useAssistAvatar ? (assistant?.avatar ?? '') : null,
+      assistantAvatar: useAssistAvatar
+          ? (_assistantForMessage(context, message, assistant)?.avatar ?? '')
+          : null,
       showUserAvatar: presentation.showUserAvatar,
       showTokenStats: presentation.showTokenStats,
       hideStreamingIndicator:
