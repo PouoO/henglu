@@ -10,6 +10,7 @@ import '../../../l10n/app_localizations.dart';
 import '../../../shared/widgets/ios_switch.dart';
 import '../../../core/services/haptics.dart';
 import 'package:Kelivo/theme/app_font_weights.dart';
+import 'chat_theme_editor_page.dart';
 
 /// 自定义主题编辑器。
 ///
@@ -318,6 +319,23 @@ class _CustomThemeEditorPageState extends State<CustomThemeEditorPage> {
                 ),
               ],
             ),
+          ),
+        ),
+        const SizedBox(height: 20),
+
+        // 聊天界面主题
+        _buildCard(
+          context,
+          child: ListTile(
+            leading: Icon(Lucide.MessageSquare, color: cs.primary),
+            title: const Text('聊天界面主题'),
+            trailing: Icon(Lucide.ChevronRight, size: 18, color: cs.onSurface.withValues(alpha: 0.3)),
+            onTap: () {
+              Haptics.soft();
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const ChatThemeEditorPage()),
+              );
+            },
           ),
         ),
         const SizedBox(height: 20),
