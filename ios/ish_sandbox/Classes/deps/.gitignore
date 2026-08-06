@@ -1,0 +1,3 @@
+# iSH build artifacts (cache on CI, do not commit)
+*
+!.gitignore

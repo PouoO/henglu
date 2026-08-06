@@ -1,0 +1,9 @@
+# iSH native build artifacts (cache on CI, do not commit)
+ish/
+libs/
+include/
+resources/
+.cache/
+build-ios/
+build-native/
+*.zip

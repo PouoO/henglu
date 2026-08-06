@@ -1,0 +1,51 @@
+# Codemagic CI for Kelivo (henglu) with embedded iSH-ARM64 sandbox.
+# Builds iSH native libraries before running `flutter build ios`.
+
+workflows:
+  henglu-ios:
+    name: Henglu iOS Build
+    instance_type: mac_mini_m1
+    max_build_duration: 180
+    environment:
+      flutter: stable
+      xcode: latest
+    cache:
+      cache_paths:
+        - ios/deps/ish
+        - ios/deps/libs
+        - ios/deps/include
+        - ios/deps/resources
+        - ios/Pods
+        - ~/.pub-cache
+    scripts:
+      - name: Install iSH build dependencies
+        script: |
+          set -e
+          brew install ninja llvm libarchive pkg-config zip
+          pip3 install meson
+
+      - name: Build iSH native libraries
+        script: |
+          set -e
+          cd ios/deps
+          ./build_ish.sh
+
+      - name: Prepare Alpine rootfs
+        script: |
+          set -e
+          cd ios/deps
+          ./prepare_alpine_rootfs.sh
+
+      - name: Get Flutter dependencies
+        script: |
+          set -e
+          flutter pub get
+
+      - name: Build iOS (no codesign)
+        script: |
+          set -e
+          flutter build ios --release --no-codesign
+
+    artifacts:
+      - build/ios/iphoneos/*.app
+      - build/ios/ipa/*.ipa

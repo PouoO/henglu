@@ -3,6 +3,7 @@ import UIKit
 import BackgroundTasks
 import UserNotifications
 import ActivityKit
+import ish_sandbox
 
 private let backgroundRefreshIdentifier = "psyche.kelivo.background-generation.refresh"
 private let backgroundProcessingIdentifier = "psyche.kelivo.background-generation.processing"
@@ -17,6 +18,7 @@ private let backgroundProcessingIdentifier = "psyche.kelivo.background-generatio
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
     GeneratedPluginRegistrant.register(with: self)
+    IshSandboxPlugin.register(with: self)
     backgroundGenerationHandler.registerBackgroundTasks()
     if let controller = window?.rootViewController as? FlutterViewController {
       let clipboardChannel = FlutterMethodChannel(name: "app.clipboard", binaryMessenger: controller.binaryMessenger)
