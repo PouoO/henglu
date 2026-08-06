@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'custom_theme.dart';
+import 'chat_theme.dart';
 
 /// 自定义主题存储。
 ///
@@ -115,6 +116,25 @@ class CustomThemeStore extends ChangeNotifier {
   void updateTryingName(String name) {
     if (_tryingOn == null) return;
     _tryingOn = _tryingOn!.copyWith(name: name);
+    notifyListeners();
+  }
+
+  /// 试穿时改聊天界面视觉 token（颜色/圆角/间距）
+  void updateTryingChatTheme(
+    bool isLight,
+    ChatTheme Function(ChatTheme current) updater,
+  ) {
+    if (_tryingOn == null) return;
+    final current = isLight ? _tryingOn!.lightChatTheme : _tryingOn!.darkChatTheme;
+    final updated = updater(current ?? ChatTheme.fromColorScheme(
+      (isLight ? _tryingOn!.light : _tryingOn!.dark).toColorScheme(
+        isLight ? Brightness.light : Brightness.dark,
+      ),
+    ));
+    _tryingOn = _tryingOn!.copyWith(
+      lightChatTheme: isLight ? updated : null,
+      darkChatTheme: isLight ? null : updated,
+    );
     notifyListeners();
   }
 
