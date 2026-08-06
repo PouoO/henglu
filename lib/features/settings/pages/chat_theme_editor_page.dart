@@ -142,7 +142,7 @@ class ChatThemeEditorPage extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 8, top: 4),
       child: Text(
         text,
-        style: const TextStyle(fontSize: 13, fontWeight: AppFontWeights.semibold),
+        style: TextStyle(fontSize: 13, fontWeight: AppFontWeights.semibold),
       ),
     );
   }
@@ -173,7 +173,7 @@ class _PreviewCard extends StatelessWidget {
             color: chatTheme.topBarColor,
             alignment: Alignment.centerLeft,
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: const Text('预览', style: TextStyle(fontSize: 15, fontWeight: AppFontWeights.semibold)),
+            child: Text('预览', style: TextStyle(fontSize: 15, fontWeight: AppFontWeights.semibold)),
           ),
           Padding(
             padding: const EdgeInsets.all(12),
