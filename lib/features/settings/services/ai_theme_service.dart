@@ -38,7 +38,7 @@ class AiThemeService {
 
   static String _buildPrompt(String userPrompt) {
     return '''
-你是一个 Material Design 3 配色助手。请根据下面的描述，生成一套适合聊天应用的浅色/深色 ColorScheme。
+你是一个 Material Design 3 配色助手。请根据下面的描述，生成一套适合聊天应用的浅色/深色 ColorScheme，以及聊天界面视觉风格。
 
 要求：
 1. 只返回合法的 JSON，不要 Markdown、不要解释。
@@ -69,10 +69,29 @@ class AiThemeService {
   "dark": {
     "primary": 0xFFB6C4FF,
     ...同上
+  },
+  "chatTheme": {
+    "light": {
+      "userBubbleColor": 0xFF4D5C92,
+      "userBubbleTextColor": 0xFFFFFFFF,
+      "assistantBubbleColor": 0xFFF0F0F0,
+      "assistantBubbleTextColor": 0xFF202020,
+      "inputBarColor": 0xFFFFFFFF,
+      "topBarColor": 0xFFF7F7F7,
+      "backgroundColor": 0xFFF7F7F7,
+      "messageBorderRadius": 18.0,
+      "userAvatarFrameColor": 0xFF4D5C92,
+      "assistantAvatarFrameColor": 0xFF595D72
+    },
+    "dark": {
+      "userBubbleColor": 0xFFB6C4FF,
+      ...
+    }
   }
 }
-3. 颜色必须对比度合适，可读性优先。
-4. 主题名称直接取用户描述的首句。
+3. chatTheme.light/dark 可以省略，省略时会从 ColorScheme 自动派生。但强烈建议提供，这样聊天界面才和整体风格一致。
+4. 颜色必须对比度合适，可读性优先。
+5. 主题名称直接取用户描述的首句。
 
 用户描述：$userPrompt
 '''.trim();
@@ -106,13 +125,74 @@ class AiThemeService {
     final darkScheme = _parseColorScheme(darkMap);
     final lightCs = lightScheme.toColorScheme(Brightness.light);
     final darkCs = darkScheme.toColorScheme(Brightness.dark);
+
+    ChatTheme? lightChatTheme;
+    ChatTheme? darkChatTheme;
+    final chatThemeMap = map['chatTheme'] as Map<String, dynamic>?;
+    if (chatThemeMap != null) {
+      try {
+        lightChatTheme = _parseChatTheme(chatThemeMap['light'] as Map<String, dynamic>?, lightCs);
+        darkChatTheme = _parseChatTheme(chatThemeMap['dark'] as Map<String, dynamic>?, darkCs);
+      } catch (e) {
+        // 如果 chatTheme 解析失败，回退到自动派生
+        debugPrint('[AiThemeService] chatTheme parse failed: $e');
+      }
+    }
+
     return CustomTheme.create(
       name: name.isNotEmpty ? name : 'AI 主题',
       light: lightScheme,
       dark: darkScheme,
-      lightChatTheme: ChatTheme.fromColorScheme(lightCs),
-      darkChatTheme: ChatTheme.fromColorScheme(darkCs),
+      lightChatTheme: lightChatTheme ?? ChatTheme.fromColorScheme(lightCs),
+      darkChatTheme: darkChatTheme ?? ChatTheme.fromColorScheme(darkCs),
     );
+  }
+
+  static ChatTheme _parseChatTheme(Map<String, dynamic>? map, ColorScheme fallback) {
+    if (map == null) return ChatTheme.fromColorScheme(fallback);
+    final fields = <String, int>{};
+    final colors = [
+      'userBubbleColor',
+      'userBubbleTextColor',
+      'assistantBubbleColor',
+      'assistantBubbleTextColor',
+      'inputBarColor',
+      'topBarColor',
+      'backgroundColor',
+      'userAvatarFrameColor',
+      'assistantAvatarFrameColor',
+    ];
+    for (final key in colors) {
+      final value = map[key];
+      if (value != null) {
+        fields[key] = _colorToInt(value);
+      }
+    }
+    final fallbackTheme = ChatTheme.fromColorScheme(fallback);
+    return fallbackTheme.copyWith(
+      userBubbleColor: fields.containsKey('userBubbleColor') ? Color(fields['userBubbleColor']!) : null,
+      userBubbleTextColor: fields.containsKey('userBubbleTextColor') ? Color(fields['userBubbleTextColor']!) : null,
+      assistantBubbleColor: fields.containsKey('assistantBubbleColor') ? Color(fields['assistantBubbleColor']!) : null,
+      assistantBubbleTextColor: fields.containsKey('assistantBubbleTextColor') ? Color(fields['assistantBubbleTextColor']!) : null,
+      inputBarColor: fields.containsKey('inputBarColor') ? Color(fields['inputBarColor']!) : null,
+      topBarColor: fields.containsKey('topBarColor') ? Color(fields['topBarColor']!) : null,
+      backgroundColor: fields.containsKey('backgroundColor') ? Color(fields['backgroundColor']!) : null,
+      userAvatarFrameColor: fields.containsKey('userAvatarFrameColor') ? Color(fields['userAvatarFrameColor']!) : null,
+      assistantAvatarFrameColor: fields.containsKey('assistantAvatarFrameColor') ? Color(fields['assistantAvatarFrameColor']!) : null,
+      messageBorderRadius: map['messageBorderRadius'] is num ? (map['messageBorderRadius'] as num).toDouble() : null,
+      messageSmallRadius: map['messageSmallRadius'] is num ? (map['messageSmallRadius'] as num).toDouble() : null,
+      avatarRadius: map['avatarRadius'] is num ? (map['avatarRadius'] as num).toDouble() : null,
+      messageSpacing: map['messageSpacing'] is num ? (map['messageSpacing'] as num).toDouble() : null,
+    );
+  }
+
+  static int _colorToInt(dynamic value) {
+    if (value is int) return value;
+    if (value is String) {
+      final parsed = int.tryParse(value.replaceAll('0x', '').replaceAll('#', ''), radix: 16);
+      if (parsed != null) return parsed | 0xFF000000;
+    }
+    throw AiThemeException('颜色字段格式错误: $value');
   }
 
   static CustomColorScheme _parseColorScheme(Map<String, dynamic> map) {
