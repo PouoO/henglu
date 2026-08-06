@@ -2,6 +2,7 @@ import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:Kelivo/theme/app_font_weights.dart';
+import 'chat_theme.dart';
 import 'package:flutter/foundation.dart'
     show defaultTargetPlatform, TargetPlatform;
 
@@ -213,6 +214,7 @@ ThemeData buildLightThemeForScheme(
   ColorScheme staticScheme, {
   ColorScheme? dynamicScheme,
   bool pureBackground = false,
+  ChatTheme? chatTheme,
 }) {
   final fontFallback = _getPlatformFontFallback();
   var scheme = (dynamicScheme?.harmonized()) ?? staticScheme;
@@ -228,6 +230,7 @@ ThemeData buildLightThemeForScheme(
   final theme = ThemeData(
     useMaterial3: true,
     colorScheme: scheme,
+    extensions: chatTheme != null ? [chatTheme] : null,
     scaffoldBackgroundColor: scheme.surface,
     snackBarTheme: SnackBarThemeData(
       behavior: SnackBarBehavior.floating,
@@ -269,6 +272,11 @@ ThemeData buildLightThemeForScheme(
     textTheme: _withFontFallback(theme.textTheme, fontFallback),
     primaryTextTheme: _withFontFallback(theme.primaryTextTheme, fontFallback),
     canvasColor: scheme.surface,
+    scaffoldBackgroundColor: chatTheme?.backgroundColor ?? theme.scaffoldBackgroundColor,
+    appBarTheme: theme.appBarTheme.copyWith(
+      backgroundColor: chatTheme?.topBarColor ?? theme.appBarTheme.backgroundColor,
+      surfaceTintColor: chatTheme?.topBarColor ?? theme.appBarTheme.surfaceTintColor,
+    ),
   );
 }
 
@@ -362,6 +370,7 @@ ThemeData buildDarkThemeForScheme(
   ColorScheme staticScheme, {
   ColorScheme? dynamicScheme,
   bool pureBackground = false,
+  ChatTheme? chatTheme,
 }) {
   final fontFallback = _getPlatformFontFallback();
   var scheme = (dynamicScheme?.harmonized()) ?? staticScheme;
@@ -377,6 +386,7 @@ ThemeData buildDarkThemeForScheme(
   final theme = ThemeData(
     useMaterial3: true,
     colorScheme: scheme,
+    extensions: chatTheme != null ? [chatTheme] : null,
     scaffoldBackgroundColor: scheme.surface,
     snackBarTheme: SnackBarThemeData(
       behavior: SnackBarBehavior.floating,
@@ -418,5 +428,10 @@ ThemeData buildDarkThemeForScheme(
     textTheme: _withFontFallback(theme.textTheme, fontFallback),
     primaryTextTheme: _withFontFallback(theme.primaryTextTheme, fontFallback),
     canvasColor: scheme.surface,
+    scaffoldBackgroundColor: chatTheme?.backgroundColor ?? theme.scaffoldBackgroundColor,
+    appBarTheme: theme.appBarTheme.copyWith(
+      backgroundColor: chatTheme?.topBarColor ?? theme.appBarTheme.backgroundColor,
+      surfaceTintColor: chatTheme?.topBarColor ?? theme.appBarTheme.surfaceTintColor,
+    ),
   );
 }

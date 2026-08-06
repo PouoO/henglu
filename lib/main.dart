@@ -752,6 +752,7 @@ class MyApp extends StatelessWidget {
                   ? buildLightThemeForScheme(
                       customTheme.toLightColorScheme(),
                       pureBackground: settings.usePureBackground,
+                      chatTheme: customTheme.lightChatTheme,
                     )
                   : buildLightThemeForScheme(
                       palette.light,
@@ -762,6 +763,7 @@ class MyApp extends StatelessWidget {
                   ? buildDarkThemeForScheme(
                       customTheme.toDarkColorScheme(),
                       pureBackground: settings.usePureBackground,
+                      chatTheme: customTheme.darkChatTheme,
                     )
                   : buildDarkThemeForScheme(
                       palette.dark,

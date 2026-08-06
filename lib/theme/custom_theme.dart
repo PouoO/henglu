@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'chat_theme.dart';
 
 /// 自定义主题模型。
 ///
@@ -11,6 +12,8 @@ class CustomTheme {
   final String name;
   final CustomColorScheme light;
   final CustomColorScheme dark;
+  final ChatTheme? lightChatTheme;
+  final ChatTheme? darkChatTheme;
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -19,6 +22,8 @@ class CustomTheme {
     required this.name,
     required this.light,
     required this.dark,
+    this.lightChatTheme,
+    this.darkChatTheme,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -27,13 +32,19 @@ class CustomTheme {
     required String name,
     CustomColorScheme? light,
     CustomColorScheme? dark,
+    ChatTheme? lightChatTheme,
+    ChatTheme? darkChatTheme,
   }) {
     final now = DateTime.now();
+    final lightScheme = light ?? CustomColorScheme.creamBerryLight();
+    final darkScheme = dark ?? CustomColorScheme.creamBerryDark();
     return CustomTheme(
       id: 'ct_${now.millisecondsSinceEpoch}',
       name: name,
-      light: light ?? CustomColorScheme.creamBerryLight(),
-      dark: dark ?? CustomColorScheme.creamBerryDark(),
+      light: lightScheme,
+      dark: darkScheme,
+      lightChatTheme: lightChatTheme ?? ChatTheme.fromColorScheme(lightScheme.toColorScheme(Brightness.light)),
+      darkChatTheme: darkChatTheme ?? ChatTheme.fromColorScheme(darkScheme.toColorScheme(Brightness.dark)),
       createdAt: now,
       updatedAt: now,
     );
@@ -43,12 +54,16 @@ class CustomTheme {
     String? name,
     CustomColorScheme? light,
     CustomColorScheme? dark,
+    ChatTheme? lightChatTheme,
+    ChatTheme? darkChatTheme,
   }) {
     return CustomTheme(
       id: id,
       name: name ?? this.name,
       light: light ?? this.light,
       dark: dark ?? this.dark,
+      lightChatTheme: lightChatTheme ?? this.lightChatTheme,
+      darkChatTheme: darkChatTheme ?? this.darkChatTheme,
       createdAt: createdAt,
       updatedAt: DateTime.now(),
     );
@@ -59,16 +74,32 @@ class CustomTheme {
         'name': name,
         'light': light.toJson(),
         'dark': dark.toJson(),
+        if (lightChatTheme != null) 'lightChatTheme': lightChatTheme!.toJson(),
+        if (darkChatTheme != null) 'darkChatTheme': darkChatTheme!.toJson(),
         'createdAt': createdAt.toIso8601String(),
         'updatedAt': updatedAt.toIso8601String(),
       };
 
   factory CustomTheme.fromJson(Map<String, dynamic> json) {
+    final light = CustomColorScheme.fromJson(json['light'] as Map<String, dynamic>);
+    final dark = CustomColorScheme.fromJson(json['dark'] as Map<String, dynamic>);
+    ChatTheme? parseChatTheme(Map<String, dynamic>? m) {
+      if (m == null) return null;
+      try {
+        return ChatTheme.fromJson(m);
+      } catch (_) {
+        return null;
+      }
+    }
     return CustomTheme(
       id: json['id'] as String,
       name: json['name'] as String,
-      light: CustomColorScheme.fromJson(json['light'] as Map<String, dynamic>),
-      dark: CustomColorScheme.fromJson(json['dark'] as Map<String, dynamic>),
+      light: light,
+      dark: dark,
+      lightChatTheme: parseChatTheme(json['lightChatTheme'] as Map<String, dynamic>?)
+          ?? ChatTheme.fromColorScheme(light.toColorScheme(Brightness.light)),
+      darkChatTheme: parseChatTheme(json['darkChatTheme'] as Map<String, dynamic>?)
+          ?? ChatTheme.fromColorScheme(dark.toColorScheme(Brightness.dark)),
       createdAt: DateTime.parse(json['createdAt'] as String),
       updatedAt: DateTime.parse(json['updatedAt'] as String),
     );

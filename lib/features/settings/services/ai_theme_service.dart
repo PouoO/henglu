@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../core/providers/settings_provider.dart';
 import '../../../core/services/api/chat_api_service.dart';
 import '../../../theme/custom_theme.dart';
+import '../../../theme/chat_theme.dart';
 
 /// AI 主题生成服务。
 ///
@@ -101,12 +102,16 @@ class AiThemeService {
     if (lightMap == null || darkMap == null) {
       throw const AiThemeException('JSON 缺少 light 或 dark 字段');
     }
-    final light = _parseColorScheme(lightMap);
-    final dark = _parseColorScheme(darkMap);
+    final lightScheme = _parseColorScheme(lightMap);
+    final darkScheme = _parseColorScheme(darkMap);
+    final lightCs = lightScheme.toColorScheme(Brightness.light);
+    final darkCs = darkScheme.toColorScheme(Brightness.dark);
     return CustomTheme.create(
       name: name.isNotEmpty ? name : 'AI 主题',
-      light: light,
-      dark: dark,
+      light: lightScheme,
+      dark: darkScheme,
+      lightChatTheme: ChatTheme.fromColorScheme(lightCs),
+      darkChatTheme: ChatTheme.fromColorScheme(darkCs),
     );
   }
 
