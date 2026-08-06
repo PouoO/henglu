@@ -48,6 +48,7 @@ import 'citation_sources_sheet.dart';
 import 'chat_suggestion_bubbles.dart';
 import 'token_display_widget.dart';
 import '../../../theme/app_font_weights.dart';
+import '../../../theme/chat_theme.dart';
 
 final RegExp _urlSchemeRe = RegExp(r'^[a-zA-Z][a-zA-Z0-9+.-]*:');
 
@@ -1653,17 +1654,26 @@ class _ChatMessageWidgetState extends State<ChatMessageWidget> {
   }) {
     final cs = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    BorderRadius radius = BorderRadius.circular(16);
+    final chatTheme = Theme.of(context).extension<ChatTheme>();
+    final borderRadius = chatTheme != null
+        ? BorderRadius.all(Radius.circular(chatTheme.messageBorderRadius))
+        : BorderRadius.circular(16);
+    final Color? bg;
+    if (chatTheme != null) {
+      bg = isUser ? chatTheme.userBubbleColor : chatTheme.assistantBubbleColor;
+    } else {
+      bg = isUser
+          ? (isDark
+              ? cs.primary.withValues(alpha: 0.15)
+              : cs.primary.withValues(alpha: 0.08))
+          : null;
+    }
     return _buildSharedChatSurface(
       context,
-      borderRadius: radius,
+      borderRadius: borderRadius,
       padding: const EdgeInsets.all(12),
-      defaultColor: isUser
-          ? (isDark
-                ? cs.primary.withValues(alpha: 0.15)
-                : cs.primary.withValues(alpha: 0.08))
-          : null,
-      bareOnDefault: !isUser,
+      defaultColor: bg,
+      bareOnDefault: bg == null,
       child: child,
     );
   }
