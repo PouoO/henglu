@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:super_sliver_list/super_sliver_list.dart';
+import 'package:provider/provider.dart';
 
 import '../../../core/models/chat_message.dart';
 import '../../../core/models/assistant.dart';
@@ -239,15 +240,15 @@ Assistant? _assistantForMessage(
 ) {
   if (message.role != 'assistant') return null;
   final provider = context.read<AssistantProvider>();
-  final match = provider.assistants.firstWhere(
-    (a) =>
-        a.chatModelId != null &&
+  for (final a in provider.assistants) {
+    if (a.chatModelId != null &&
         a.chatModelProvider != null &&
         a.chatModelId == message.modelId &&
-        a.chatModelProvider == message.providerId,
-    orElse: () => fallback,
-  );
-  return match;
+        a.chatModelProvider == message.providerId) {
+      return a;
+    }
+  }
+  return fallback;
 }
 
 class _MessageListViewState extends State<MessageListView> {
